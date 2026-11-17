@@ -1,0 +1,37 @@
+.DS_Store
+xcuserdata/
+
+.build/
+dist/
+build-package/
+__pycache__/
+*.pyc
+
+tools/activation/build/
+
+build/
+docs/matrix-results.json.lock
+
+# Working notes and generated reports stay local; the user docs below are tracked
+docs/*
+!docs/ASSETS.md
+!docs/PERFORMANCE.md
+!docs/TODO.md
+!docs/GUEST-BENCHMARKS.md
+!docs/BUILDING.md
+!docs/PROFILING.md
+!docs/COMPATIBILITY.md
+!docs/DESKTOP.md
+!docs/NETWORK.md
+!docs/BUILD-PLAN.md
+scripts/build.env
+*.profraw
+
+# Rust desktop app
+/target/
+
+# Local tool state: Claude Code agent worktrees and settings, and the old Swift packages' build output
+/.claude/worktrees/
+/.claude/settings.local.json
+.build-*/
+/Packages/
