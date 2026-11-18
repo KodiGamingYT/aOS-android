@@ -180,10 +180,11 @@ jobs:
             --extra-cflags="-fPIC -O2 -I$PREFIX/include -DQEMU_IOS_EMBEDDED=1" \
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
-          ninja libqemu-arm-softmmu.fa || ninja
+          ninja libqemu-arm-softmmu.fa
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
-          QEMU_ARCHIVES=$(find . -name "*.a" -o -name "*.fa" | tr '\n' ' ')
+          QEMU_ARCHIVES=$(find . -path ./qemu-bundle -prune -o -type f \( -name "*.a" -o -name "*.fa" \) ! -name "*testfloat*" ! -name "*testqapi*" -print | tr '\n' ' ')
+          echo "Linking archives: $QEMU_ARCHIVES"
 
           "$CC" -shared -fPIC -O2 \
             -Wl,-z,max-page-size=16384 \
