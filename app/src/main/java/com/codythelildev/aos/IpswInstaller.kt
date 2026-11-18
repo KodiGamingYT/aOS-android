@@ -21,10 +21,48 @@ data class InstallProgress(
     val errorMessage: String? = null
 )
 
+data class InstalledContainer(
+    val target: IosTarget,
+    val hasCydia: Boolean
+)
+
 class IpswInstaller(private val context: Context) {
 
     fun getContainerDir(target: IosTarget): File {
         return File(context.filesDir, "containers/${target.id}")
+    }
+
+    private fun openAppleConnection(initialUrl: String): HttpURLConnection {
+        var currentUrl = initialUrl
+        var redirects = 0
+        while (redirects < 6) {
+            val url = URL(currentUrl)
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 20000
+                readTimeout = 45000
+                requestMethod = "GET"
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "InetURL/1.0")
+                setRequestProperty("Accept", "*/*")
+            }
+            conn.connect()
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val location = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (location.isNullOrBlank()) {
+                    throw IllegalStateException("Empty redirect from Apple CDN (HTTP $code)")
+                }
+                currentUrl = URL(url, location).toString()
+                redirects++
+            } else if (code in 200..299) {
+                return conn
+            } else {
+                conn.disconnect()
+                throw IllegalStateException("Apple CDN returned HTTP $code")
+            }
+        }
+        throw IllegalStateException("Too many redirects from Apple CDN")
     }
 
     fun installContainer(
@@ -35,6 +73,7 @@ class IpswInstaller(private val context: Context) {
         if (!containerDir.exists()) containerDir.mkdirs()
 
         val ipswFile = File(containerDir, "restore.ipsw")
+        if (ipswFile.exists()) ipswFile.delete()
 
         try {
             emit(
@@ -46,14 +85,7 @@ class IpswInstaller(private val context: Context) {
                 )
             )
 
-            val url = URL(target.ipswUrl)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 15000
-                readTimeout = 30000
-                requestMethod = "GET"
-            }
-            connection.connect()
-
+            val connection = openAppleConnection(target.ipswUrl)
             val totalBytes = connection.contentLengthLong.coerceAtLeast(1L)
             var downloadedBytes = 0L
 
@@ -71,13 +103,14 @@ class IpswInstaller(private val context: Context) {
                             InstallProgress(
                                 stepIndex = 1,
                                 stepTitle = "Download from Apple",
-                                detailText = "Downloading ${target.title}:$mbDone MB / $mbTotal MB",
+                                detailText = "Downloading ${target.title}: $mbDone MB / $mbTotal MB",
                                 progressFraction = fraction
                             )
                         )
                     }
                 }
             }
+            connection.disconnect()
 
             emit(
                 InstallProgress(
@@ -138,11 +171,12 @@ class IpswInstaller(private val context: Context) {
                 )
             )
         } catch (e: Exception) {
+            if (ipswFile.exists()) ipswFile.delete()
             emit(
                 InstallProgress(
                     stepIndex = 1,
-                    stepTitle = "Installation Error",
-                    detailText = e.localizedMessage ?: "Unknown network or storage error",
+                    stepTitle = "Download / Setup Error",
+                    detailText = e.localizedMessage ?: "Connection failed. Check internet and retry.",
                     progressFraction = 0f,
                     errorMessage = e.localizedMessage ?: "Error"
                 )
@@ -152,5 +186,25 @@ class IpswInstaller(private val context: Context) {
 
     fun isContainerInstalled(target: IosTarget): Boolean {
         return File(getContainerDir(target), "container.ready").exists()
+    }
+
+    fun getInstalledContainers(): List<InstalledContainer> {
+        return IosTarget.entries.mapNotNull { target ->
+            val marker = File(getContainerDir(target), "container.ready")
+            if (marker.exists()) {
+                val text = runCatching { marker.readText() }.getOrDefault("")
+                val hasCydia = text.contains("cydia=true")
+                InstalledContainer(target = target, hasCydia = hasCydia)
+            } else {
+                null
+            }
+        }
+    }
+
+    fun deleteContainer(target: IosTarget) {
+        val dir = getContainerDir(target)
+        if (dir.exists()) {
+            dir.deleteRecursively()
+        }
     }
 }
