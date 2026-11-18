@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -12,6 +13,12 @@
 #define LOG_TAG "QemuIosEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+/* Deklaracje punktów wejścia QEMU system emulator */
+extern int qemu_init(int argc, char **argv, char **envp);
+extern void qemu_main_loop(void);
+extern void qemu_cleanup(void);
+extern void qemu_system_shutdown_request(int reason);
 
 static ANativeWindow *g_window = NULL;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -26,87 +33,102 @@ static float g_res_scale = 0.75f;
 static int g_renderer_id = 0;
 static bool g_net_enabled = true;
 
-static volatile int g_last_gpio_key = -1;
-static volatile bool g_last_gpio_pressed = false;
-static volatile float g_touch_x = -1.0f;
-static volatile float g_touch_y = -1.0f;
-static volatile int g_touch_action = -1;
+/* Bufor ramki wideo współdzielony między framebufferem QEMU a Android Surface */
+static uint32_t *g_fb_pixels = NULL;
+static int g_fb_width = 640;
+static int g_fb_height = 1136;
 
-static void render_boot_framebuffer(ANativeWindow *win, uint32_t frame_tick) {
-    if (!win) return;
-
-    ANativeWindow_Buffer buffer;
-    if (ANativeWindow_lock(win, &buffer, NULL) != 0) {
+/* Funkcja wywoływana przez sterownik LCD/framebuffer w qemu-ios przy odświeżaniu klatki */
+void aos_push_framebuffer(const uint32_t *src_bgra, int width, int height) {
+    pthread_mutex_lock(&g_lock);
+    if (!g_window || !src_bgra || width <= 0 || height <= 0) {
+        pthread_mutex_unlock(&g_lock);
         return;
     }
 
-    uint32_t *pixels = (uint32_t *)buffer.bits;
-    int width = buffer.width;
-    int height = buffer.height;
+    ANativeWindow_Buffer buffer;
+    if (ANativeWindow_lock(g_window, &buffer, NULL) != 0) {
+        pthread_mutex_unlock(&g_lock);
+        return;
+    }
+
+    uint32_t *dst = (uint32_t *)buffer.bits;
+    int dst_w = buffer.width;
+    int dst_h = buffer.height;
     int stride = buffer.stride;
 
-    // Czyszczenie ekranu (ciemne tło bootloadera iBoot)
-    for (int y = 0; y < height; y++) {
-        uint32_t *row = pixels + y * stride;
-        for (int x = 0; x < width; x++) {
-            row[x] = 0xFF0B0B0D;
+    for (int y = 0; y < dst_h; y++) {
+        int sy = (y * height) / dst_h;
+        if (sy >= height) sy = height - 1;
+        const uint32_t *src_row = src_bgra + sy * width;
+        uint32_t *dst_row = dst + y * stride;
+
+        for (int x = 0; x < dst_w; x++) {
+            int sx = (x * width) / dst_w;
+            if (sx >= width) sx = width - 1;
+            uint32_t p = src_row[sx];
+            /* Konwersja BGRA -> RGBA dla ANativeWindow (WINDOW_FORMAT_RGBA_8888) */
+            uint8_t b = (p >> 0) & 0xFF;
+            uint8_t g = (p >> 8) & 0xFF;
+            uint8_t r = (p >> 16) & 0xFF;
+            uint8_t a = 0xFF;
+            dst_row[x] = ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
         }
     }
 
-    // Wskaźnik postępu inicjalizacji rdzenia ARM / iBoot
-    int bar_w = (width * 3) / 5;
-    int bar_h = height / 90;
-    if (bar_h < 6) bar_h = 6;
-    int start_x = (width - bar_w) / 2;
-    int start_y = (height * 58) / 100;
-    int fill_w = (int)((frame_tick % 100) * bar_w / 100);
+    ANativeWindow_unlockAndPost(g_window);
+    pthread_mutex_unlock(&g_lock);
+}
 
-    for (int y = start_y; y < start_y + bar_h && y < height; y++) {
-        uint32_t *row = pixels + y * stride;
-        for (int x = start_x; x < start_x + bar_w && x < width; x++) {
-            row[x] = (x - start_x <= fill_w) ? 0xFFF2F2F7 : 0xFF2C2C2E;
-        }
+static const char *resolve_machine_type(const char *board) {
+    if (strcmp(board, "n90ap") == 0) {
+        return "s5l8930x"; /* iPhone 4 (Apple A4) */
     }
-
-    // Reakcja wizualna na dotyk ekranu
-    if (g_touch_action == 0 || g_touch_action == 2) {
-        int tx = (int)(g_touch_x * width);
-        int ty = (int)(g_touch_y * height);
-        int r = width / 28;
-        for (int dy = -r; dy <= r; dy++) {
-            int py = ty + dy;
-            if (py < 0 || py >= height) continue;
-            uint32_t *row = pixels + py * stride;
-            for (int dx = -r; dx <= r; dx++) {
-                int px = tx + dx;
-                if (px >= 0 && px < width && (dx * dx + dy * dy <= r * r)) {
-                    row[px] = 0xFF0A84FF;
-                }
-            }
-        }
-    }
-
-    ANativeWindow_unlockAndPost(win);
+    return "s5l8950x";     /* iPhone 5 n41ap / n42ap (Apple A6) */
 }
 
 static void *vm_worker_loop(void *arg) {
     (void)arg;
-    LOGI("Starting QEMU-iOS worker: board=%s cores=%d ram=%dMB path=%s",
-         g_board_config, g_cpu_cores, g_ram_mb, g_container_path);
 
-    uint32_t tick = 0;
-    while (g_vm_running) {
-        pthread_mutex_lock(&g_lock);
-        if (g_window != NULL) {
-            render_boot_framebuffer(g_window, tick);
-        }
-        pthread_mutex_unlock(&g_lock);
+    char kernel_path[600];
+    char dtb_path[600];
+    char rootfs_path[600];
+    char ram_arg[32];
+    char smp_arg[32];
+    char drive_arg[700];
 
-        tick++;
-        usleep(33000); // ~30 FPS
-    }
+    snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
+    snprintf(dtb_path, sizeof(dtb_path), "%s/devicetree.img3", g_container_path);
+    snprintf(rootfs_path, sizeof(rootfs_path), "%s/rootfs.dmg", g_container_path);
+    snprintf(ram_arg, sizeof(ram_arg), "%dM", g_ram_mb);
+    snprintf(smp_arg, sizeof(smp_arg), "%d", g_cpu_cores);
+    snprintf(drive_arg, sizeof(drive_arg), "file=%s,format=raw,if=none,id=nand0", rootfs_path);
 
-    LOGI("QEMU-iOS worker stopped.");
+    const char *machine = resolve_machine_type(g_board_config);
+
+    LOGI("Booting QEMU-iOS machine=%s board=%s ram=%s smp=%s kernel=%s",
+         machine, g_board_config, ram_arg, smp_arg, kernel_path);
+
+    char *argv[] = {
+        "qemu-system-arm",
+        "-M", (char *)machine,
+        "-m", ram_arg,
+        "-smp", smp_arg,
+        "-kernel", kernel_path,
+        "-dtb", dtb_path,
+        "-drive", drive_arg,
+        "-serial", "stdio",
+        "-display", "none",
+        NULL
+    };
+    int argc = 15;
+
+    qemu_init(argc, argv, NULL);
+    qemu_main_loop();
+    qemu_cleanup();
+
+    g_vm_running = false;
+    LOGI("QEMU-iOS main loop exited.");
     return NULL;
 }
 
@@ -150,7 +172,7 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeStartVm(
     pthread_mutex_unlock(&g_lock);
 
     if (pthread_create(&g_vm_thread, NULL, vm_worker_loop, NULL) != 0) {
-        LOGE("Failed to spawn VM worker thread");
+        LOGE("Failed to create QEMU-iOS worker thread");
         g_vm_running = false;
         return JNI_FALSE;
     }
@@ -164,8 +186,9 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeStopVm(JNIEnv *env, jobject th
     (void)thiz;
 
     if (!g_vm_running) return;
-    g_vm_running = false;
+    qemu_system_shutdown_request(1);
     pthread_join(g_vm_thread, NULL);
+    g_vm_running = false;
 }
 
 JNIEXPORT void JNICALL
@@ -210,10 +233,7 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeSendGpioKey(
         jboolean is_pressed) {
     (void)env;
     (void)thiz;
-
-    g_last_gpio_key = key_code;
-    g_last_gpio_pressed = (is_pressed == JNI_TRUE);
-    LOGI("GPIO key event: code=%d pressed=%d", key_code, g_last_gpio_pressed);
+    LOGI("QEMU GPIO key=%d pressed=%d", key_code, is_pressed == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL
@@ -225,8 +245,7 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeSendTouchEvent(
         jint action) {
     (void)env;
     (void)thiz;
-
-    g_touch_x = normalized_x;
-    g_touch_y = normalized_y;
-    g_touch_action = action;
+    (void)normalized_x;
+    (void)normalized_y;
+    (void)action;
 }
