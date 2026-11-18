@@ -3,6 +3,7 @@ package com.codythelildev.aos
 enum class IosTarget(
     val id: String,
     val title: String,
+    val shortDeviceName: String,
     val deviceModel: String,
     val boardConfig: String,
     val ipswUrl: String,
@@ -12,27 +13,30 @@ enum class IosTarget(
     IOS_6_1_4(
         id = "ios_6_1_4",
         title = "iOS 6.1.4",
+        shortDeviceName = "iPhone 5",
         deviceModel = "iPhone 5 (iPhone5,2)",
         boardConfig = "n42ap",
-        ipswUrl = "https://appldnld.apple.com/iOS6.1/091-2611.20130502.3232A/iPhone5,2_6.1.4_10B350_Restore.ipsw",
+        ipswUrl = "https://secure-appldnld.apple.com/iOS6.1/091-2611.20130502.3232A/iPhone5,2_6.1.4_10B350_Restore.ipsw",
         defaultRamMb = 1024,
         supportsCydia = true
     ),
     IOS_7_1_2(
         id = "ios_7_1_2",
         title = "iOS 7.1.2",
+        shortDeviceName = "iPhone 4",
         deviceModel = "iPhone 4 (iPhone3,1)",
         boardConfig = "n90ap",
-        ipswUrl = "https://appldnld.apple.com/iOS7.1/031-4812.20140627.cq6fd/iPhone3,1_7.1.2_11D257_Restore.ipsw",
+        ipswUrl = "https://secure-appldnld.apple.com/iOS7.1/031-4812.20140627.cq6fd/iPhone3,1_7.1.2_11D257_Restore.ipsw",
         defaultRamMb = 512,
         supportsCydia = true
     ),
     IOS_8_4_1(
         id = "ios_8_4_1",
         title = "iOS 8.4.1",
+        shortDeviceName = "iPhone 5",
         deviceModel = "iPhone 5 (iPhone5,1)",
         boardConfig = "n41ap",
-        ipswUrl = "https://appldnld.apple.com/ios8.4.1/031-31186-20150812-751D243C-3C8F-11E5-8E4F-B51A3A53DB92/iPhone5,1_8.4.1_12H321_Restore.ipsw",
+        ipswUrl = "https://secure-appldnld.apple.com/ios8.4.1/031-31186-20150812-751D243C-3C8F-11E5-8E4F-B51A3A53DB92/iPhone5,1_8.4.1_12H321_Restore.ipsw",
         defaultRamMb = 1024,
         supportsCydia = true
     )
