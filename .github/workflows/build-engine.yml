@@ -1,0 +1,33 @@
+name: Build libqemu-ios.so Artifact
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-engine:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate Android NDK and Compile libqemu-ios.so (arm64-v8a)
+        run: |
+          NDK_DIR=$(ls -d /usr/local/lib/android/sdk/ndk/* | sort -V | tail -n 1)
+          echo "Using NDK: $NDK_DIR"
+          CC="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+
+          mkdir -p out/arm64-v8a
+          "$CC" -shared -fPIC -O2 \
+            -Wl,-z,max-page-size=16384 \
+            engine/qemu_ios_jni.c \
+            -landroid -llog \
+            -o out/arm64-v8a/libqemu-ios.so
+
+          ls -lh out/arm64-v8a/libqemu-ios.so
+
+      - name: Upload libqemu-ios.so Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libqemu-ios-arm64
+          path: out/arm64-v8a/libqemu-ios.so
