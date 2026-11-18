@@ -5,12 +5,12 @@ plugins {
  
 android {
     namespace = "com.codythelildev.aos"
-    compileSdk = 37
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.codythelildev.aos"
         minSdk = 29
-        targetSdk = 37
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
 
