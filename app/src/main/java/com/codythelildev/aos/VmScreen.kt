@@ -31,7 +31,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun VmScreen(
     target: IosTarget,
-    cydiaInstalled: Boolean,
     settings: VmSettings,
     onSendHardwareButton: (button: HardwareButton, isPressed: Boolean) -> Unit,
     onSendTouchEvent: (x: Float, y: Float, action: Int) -> Unit,
@@ -99,10 +98,10 @@ fun VmScreen(
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "${target.title}${if (cydiaInstalled) " + Cydia" else ""}",
+                    text = "${target.shortDeviceName} • ${target.title}",
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
+                    fontSize = 15.sp
                 )
                 Text(
                     text = statusText,
