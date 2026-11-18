@@ -130,7 +130,6 @@ jobs:
             --cross-prefix="$TOOLCHAIN/bin/aarch64-linux-android29-" \
             --cc="$CC" \
             --cxx="$CXX" \
-            --pkg-config="$PREFIX/bin/aarch64-linux-android29-pkg-config" \
             --target-list=arm-softmmu \
             --enable-tcg \
             --disable-kvm \
