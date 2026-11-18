@@ -9,10 +9,16 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PhoneIphone
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +34,7 @@ import kotlinx.coroutines.launch
 
 enum class AosRoute {
     WELCOME,
+    CONTAINER_LIBRARY,
     CHOOSE_CONTAINER,
     INSTALLING,
     RUNNING_VM,
@@ -52,11 +59,20 @@ fun AosAppRoot() {
     val installer = remember { IpswInstaller(context) }
     val scope = rememberCoroutineScope()
 
-    var currentRoute by remember { mutableStateOf(AosRoute.WELCOME) }
-    var previousRoute by remember { mutableStateOf(AosRoute.CHOOSE_CONTAINER) }
+    var installedContainers by remember { mutableStateOf(installer.getInstalledContainers()) }
+    var currentRoute by remember {
+        mutableStateOf(
+            if (installer.getInstalledContainers().isNotEmpty()) {
+                AosRoute.CONTAINER_LIBRARY
+            } else {
+                AosRoute.WELCOME
+            }
+        )
+    }
+    var previousRoute by remember { mutableStateOf(currentRoute) }
 
     var selectedTarget by remember { mutableStateOf(IosTarget.IOS_7_1_2) }
-    var installCydia by remember { mutableStateOf(true) }
+    var installCydia by remember { mutableStateOf(false) }
     var vmSettings by remember { mutableStateOf(VmSettings()) }
     var installProgress by remember {
         mutableStateOf(
@@ -64,11 +80,16 @@ fun AosAppRoot() {
         )
     }
 
-    fun bootSelectedContainer() {
-        val containerDir = installer.getContainerDir(selectedTarget)
+    fun refreshContainers() {
+        installedContainers = installer.getInstalledContainers()
+    }
+
+    fun bootContainer(target: IosTarget) {
+        selectedTarget = target
+        val containerDir = installer.getContainerDir(target)
         QemuNativeBridge.startVm(
             containerPath = containerDir.absolutePath,
-            boardConfig = selectedTarget.boardConfig,
+            boardConfig = target.boardConfig,
             cpuCores = vmSettings.cpuCores,
             ramMb = vmSettings.ramMb,
             resolutionScale = vmSettings.resolutionScale,
@@ -89,6 +110,31 @@ fun AosAppRoot() {
             )
         }
 
+        AosRoute.CONTAINER_LIBRARY -> {
+            ContainerLibraryScreen(
+                containers = installedContainers,
+                onBootContainer = { container ->
+                    vmSettings = vmSettings.copy(ramMb = container.target.defaultRamMb)
+                    bootContainer(container.target)
+                },
+                onDeleteContainer = { container ->
+                    installer.deleteContainer(container.target)
+                    refreshContainers()
+                    if (installer.getInstalledContainers().isEmpty()) {
+                        currentRoute = AosRoute.CHOOSE_CONTAINER
+                    }
+                },
+                onAddNewContainer = {
+                    installCydia = false
+                    currentRoute = AosRoute.CHOOSE_CONTAINER
+                },
+                onOpenSettings = {
+                    previousRoute = AosRoute.CONTAINER_LIBRARY
+                    currentRoute = AosRoute.SETTINGS
+                }
+            )
+        }
+
         AosRoute.CHOOSE_CONTAINER -> {
             ChooseContainerScreen(
                 selectedTarget = selectedTarget,
@@ -99,20 +145,26 @@ fun AosAppRoot() {
                 installCydia = installCydia,
                 onToggleCydia = { installCydia = it },
                 isAlreadyInstalled = installer.isContainerInstalled(selectedTarget),
+                hasExistingContainers = installedContainers.isNotEmpty(),
+                onBackToLibrary = {
+                    refreshContainers()
+                    currentRoute = AosRoute.CONTAINER_LIBRARY
+                },
                 onOpenSettings = {
                     previousRoute = AosRoute.CHOOSE_CONTAINER
                     currentRoute = AosRoute.SETTINGS
                 },
                 onProceed = {
                     if (installer.isContainerInstalled(selectedTarget)) {
-                        bootSelectedContainer()
+                        bootContainer(selectedTarget)
                     } else {
                         currentRoute = AosRoute.INSTALLING
                         scope.launch {
                             installer.installContainer(selectedTarget, installCydia).collect { state ->
                                 installProgress = state
                                 if (state.isCompleted) {
-                                    bootSelectedContainer()
+                                    refreshContainers()
+                                    bootContainer(selectedTarget)
                                 }
                             }
                         }
@@ -125,14 +177,31 @@ fun AosAppRoot() {
             InstallingScreen(
                 target = selectedTarget,
                 progress = installProgress,
-                onCancel = { currentRoute = AosRoute.CHOOSE_CONTAINER }
+                onRetry = {
+                    scope.launch {
+                        installer.installContainer(selectedTarget, installCydia).collect { state ->
+                            installProgress = state
+                            if (state.isCompleted) {
+                                refreshContainers()
+                                bootContainer(selectedTarget)
+                            }
+                        }
+                    }
+                },
+                onCancel = {
+                    refreshContainers()
+                    currentRoute = if (installedContainers.isNotEmpty()) {
+                        AosRoute.CONTAINER_LIBRARY
+                    } else {
+                        AosRoute.CHOOSE_CONTAINER
+                    }
+                }
             )
         }
 
         AosRoute.RUNNING_VM -> {
             VmScreen(
                 target = selectedTarget,
-                cydiaInstalled = installCydia,
                 settings = vmSettings,
                 onSendHardwareButton = { button, isPressed ->
                     QemuNativeBridge.sendGpioKey(button.qemuKeyCode, isPressed)
@@ -148,7 +217,12 @@ fun AosAppRoot() {
                 },
                 onStopVm = {
                     QemuNativeBridge.stopVm()
-                    currentRoute = AosRoute.CHOOSE_CONTAINER
+                    refreshContainers()
+                    currentRoute = if (installedContainers.isNotEmpty()) {
+                        AosRoute.CONTAINER_LIBRARY
+                    } else {
+                        AosRoute.CHOOSE_CONTAINER
+                    }
                 }
             )
         }
@@ -220,12 +294,143 @@ fun WelcomeScreen(
 }
 
 @Composable
+fun ContainerLibraryScreen(
+    containers: List<InstalledContainer>,
+    onBootContainer: (InstalledContainer) -> Unit,
+    onDeleteContainer: (InstalledContainer) -> Unit,
+    onAddNewContainer: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .systemBarsPadding()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Containers",
+                        color = Color.White,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Select an iOS container to boot",
+                        color = Color(0xFF8E8E93),
+                        fontSize = 14.sp
+                    )
+                }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.White)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(containers, key = { it.target.id }) { item ->
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFF1C1C1E),
+                        border = BorderStroke(1.dp, Color(0xFF2C2C2E)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onBootContainer(item) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhoneIphone,
+                                    contentDescription = null,
+                                    tint = Color(0xFF0A84FF),
+                                    modifier = Modifier.size(34.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "${item.target.shortDeviceName} • ${item.target.title}",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 17.sp
+                                    )
+                                    Text(
+                                        text = if (item.hasCydia) "Jailbroken (Cydia)" else "Stock iOS • ${item.target.defaultRamMb} MB RAM",
+                                        color = Color(0xFF8E8E93),
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onDeleteContainer(item) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = Color(0xFFFF453A)
+                                    )
+                                }
+                                IconButton(onClick = { onBootContainer(item) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Boot",
+                                        tint = Color(0xFF30D158),
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onAddNewContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF0A84FF),
+                contentColor = Color.White
+            )
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Add Container", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
 fun ChooseContainerScreen(
     selectedTarget: IosTarget,
     onSelectTarget: (IosTarget) -> Unit,
     installCydia: Boolean,
     onToggleCydia: (Boolean) -> Unit,
     isAlreadyInstalled: Boolean,
+    hasExistingContainers: Boolean,
+    onBackToLibrary: () -> Unit,
     onOpenSettings: () -> Unit,
     onProceed: () -> Unit
 ) {
@@ -243,12 +448,23 @@ fun ChooseContainerScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Choose your first container",
-                    color = Color.White,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (hasExistingContainers) {
+                        IconButton(onClick = onBackToLibrary) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (hasExistingContainers) "New container" else "Choose your first container",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.White)
                 }
@@ -298,7 +514,7 @@ fun ChooseContainerScreen(
                                     fontSize = 17.sp
                                 )
                                 Text(
-                                    text = "${target.deviceModel} •${target.defaultRamMb} MB RAM",
+                                    text = "${target.deviceModel} • ${target.defaultRamMb} MB RAM",
                                     color = Color(0xFF8E8E93),
                                     fontSize = 13.sp
                                 )
@@ -369,8 +585,11 @@ fun ChooseContainerScreen(
 fun InstallingScreen(
     target: IosTarget,
     progress: InstallProgress,
+    onRetry: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val hasError = progress.errorMessage != null
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -381,15 +600,15 @@ fun InstallingScreen(
     ) {
         Column {
             Text(
-                text = target.title,
+                text = "${target.shortDeviceName} • ${target.title}",
                 color = Color.White,
-                fontSize = 28.sp,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Setting up: step ${progress.stepIndex} of${progress.totalSteps}",
-                color = Color(0xFFFF9F0A),
+                text = if (hasError) "Setup failed" else "Setting up: step ${progress.stepIndex} of ${progress.totalSteps}",
+                color = if (hasError) Color(0xFFFF453A) else Color(0xFFFF9F0A),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -409,25 +628,45 @@ fun InstallingScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            LinearProgressIndicator(
-                progress = { progress.progressFraction },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp),
-                color = Color(0xFF0A84FF),
-                trackColor = Color(0xFF2C2C2E)
-            )
+            if (!hasError) {
+                LinearProgressIndicator(
+                    progress = { progress.progressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp),
+                    color = Color(0xFF0A84FF),
+                    trackColor = Color(0xFF2C2C2E)
+                )
+            }
         }
 
-        OutlinedButton(
-            onClick = onCancel,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, Color(0xFFFF453A))
-        ) {
-            Text("Cancel", color = Color(0xFFFF453A), fontSize = 16.sp)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (hasError) {
+                Button(
+                    onClick = onRetry,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF0A84FF),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Retry Download", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, Color(0xFFFF453A))
+            ) {
+                Text("Cancel", color = Color(0xFFFF453A), fontSize = 16.sp)
+            }
         }
     }
 }
