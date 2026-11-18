@@ -25,7 +25,7 @@ jobs:
           TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
           PREFIX="$GITHUB_WORKSPACE/deps-arm64"
-          mkdir -p "$PREFIX"
+          mkdir -p "$PREFIX/bin"
 
           echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
           echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
@@ -42,13 +42,22 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/build-deps"
           cd "$GITHUB_WORKSPACE/build-deps"
 
+          cat > "$PREFIX/bin/aarch64-linux-android29-pkg-config" <<EOF
+          #!/usr/bin/env bash
+          export PKG_CONFIG_DIR=
+          export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
+          export PKG_CONFIG_SYSROOT_DIR=
+          exec pkg-config "\$@"
+          EOF
+          chmod +x "$PREFIX/bin/aarch64-linux-android29-pkg-config"
+
           cat > "$GITHUB_WORKSPACE/android-arm64-cross.txt" <<EOF
           [binaries]
           c = '$CC'
           cpp = '$CXX'
           ar = '$AR'
           strip = '$STRIP'
-          pkg-config = 'pkg-config'
+          pkg-config = '$PREFIX/bin/aarch64-linux-android29-pkg-config'
 
           [built-in options]
           c_args = ['-fPIC', '-O2', '-I$PREFIX/include']
@@ -63,6 +72,7 @@ jobs:
           endian = 'little'
           EOF
 
+          export PATH="$PREFIX/bin:$PATH"
           export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
@@ -111,6 +121,7 @@ jobs:
           git clone --depth 1 https://github.com/devos50/qemu-ios.git qemu-ios-src || \
           git clone --depth 1 https://github.com/VisualApple/qemu-ios.git qemu-ios-src
 
+          export PATH="$PREFIX/bin:$PATH"
           export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
@@ -119,6 +130,7 @@ jobs:
             --cross-prefix="$TOOLCHAIN/bin/aarch64-linux-android29-" \
             --cc="$CC" \
             --cxx="$CXX" \
+            --pkg-config="$PREFIX/bin/aarch64-linux-android29-pkg-config" \
             --target-list=arm-softmmu \
             --enable-tcg \
             --disable-kvm \
