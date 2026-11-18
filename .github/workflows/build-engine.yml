@@ -27,6 +27,13 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/deps-arm64"
           mkdir -p "$PREFIX/bin"
 
+          # Dowiązania dla narzędzi LLVM pod prefiksem aarch64-linux-android29-
+          ln -sf "$TOOLCHAIN/bin/llvm-nm" "$TOOLCHAIN/bin/aarch64-linux-android29-nm"
+          ln -sf "$TOOLCHAIN/bin/llvm-ar" "$TOOLCHAIN/bin/aarch64-linux-android29-ar"
+          ln -sf "$TOOLCHAIN/bin/llvm-ranlib" "$TOOLCHAIN/bin/aarch64-linux-android29-ranlib"
+          ln -sf "$TOOLCHAIN/bin/llvm-strip" "$TOOLCHAIN/bin/aarch64-linux-android29-strip"
+          ln -sf "$TOOLCHAIN/bin/llvm-objcopy" "$TOOLCHAIN/bin/aarch64-linux-android29-objcopy"
+
           echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
           echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
           echo "SYSROOT=$SYSROOT" >> $GITHUB_ENV
@@ -139,6 +146,7 @@ jobs:
             --disable-sdl \
             --disable-vnc \
             --disable-curses \
+            --disable-virtfs \
             --disable-docs \
             --disable-tools \
             --disable-guest-agent \
