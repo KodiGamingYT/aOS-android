@@ -161,6 +161,8 @@ jobs:
             --cxx="$CXX" \
             --target-list=arm-softmmu \
             --enable-tcg \
+            --disable-pie \
+            --disable-plugins \
             --disable-kvm \
             --disable-gtk \
             --disable-sdl \
