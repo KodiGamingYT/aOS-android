@@ -43,20 +43,27 @@ jobs:
           echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
           echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
 
-      - name: Cross-compile zlib, libffi, pcre2, glib & pixman for arm64-v8a
+      - name: Cache compiled arm64-v8a dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: deps-arm64
+          key: arm64-deps-zlib1.3.1-ffi3.4.6-pcre10.43-glib2.78.4-pixman0.43.4-openssl3.3.2
+
+      - name: Cross-compile zlib, libffi, pcre2, glib, pixman & openssl for arm64-v8a
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$GITHUB_WORKSPACE/build-deps"
           cd "$GITHUB_WORKSPACE/build-deps"
 
-          cat > "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config" <<EOF
+          cat > "$PREFIX/bin/aarch64-linux-android29-pkg-config" <<EOF
           #!/usr/bin/env bash
           export PKG_CONFIG_DIR=
           export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
           export PKG_CONFIG_SYSROOT_DIR=
           exec pkg-config "\$@"
           EOF
-          chmod +x "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
-          cp "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config" "$PREFIX/bin/aarch64-linux-android29-pkg-config"
+          chmod +x "$PREFIX/bin/aarch64-linux-android29-pkg-config"
 
           cat > "$GITHUB_WORKSPACE/android-arm64-cross.txt" <<EOF
           [binaries]
@@ -64,7 +71,7 @@ jobs:
           cpp = '$CXX'
           ar = '$AR'
           strip = '$STRIP'
-          pkg-config = '$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config'
+          pkg-config = '$PREFIX/bin/aarch64-linux-android29-pkg-config'
 
           [built-in options]
           c_args = ['-fPIC', '-O2', '-I$PREFIX/include']
@@ -122,6 +129,20 @@ jobs:
           ninja -C _build && ninja -C _build install
           cd ..
 
+          # 6. OpenSSL (AES / SHA1 / Bignum dla układów Apple S5L)
+          curl -L https://github.com/openssl/openssl/releases/download/openssl-3.3.2/openssl-3.3.2.tar.gz -o openssl.tar.gz
+          tar xf openssl.tar.gz && cd openssl-3.3.2
+          ANDROID_NDK_ROOT="$NDK_DIR" PATH="$TOOLCHAIN/bin:$PATH" \
+            ./Configure android-arm64 -D__ANDROID_API__=29 no-shared no-tests --prefix="$PREFIX" --openssldir="$PREFIX/ssl"
+          ANDROID_NDK_ROOT="$NDK_DIR" PATH="$TOOLCHAIN/bin:$PATH" make -j$(nproc)
+          ANDROID_NDK_ROOT="$NDK_DIR" PATH="$TOOLCHAIN/bin:$PATH" make install_sw
+          cd ..
+
+      - name: Ensure toolchain pkg-config wrapper exists
+        run: |
+          cp "$PREFIX/bin/aarch64-linux-android29-pkg-config" "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
+          chmod +x "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
+
       - name: Clone & build qemu-ios core + JNI wrapper into libqemu-ios.so
         run: |
           cd "$GITHUB_WORKSPACE"
@@ -173,6 +194,7 @@ jobs:
             "$GITHUB_WORKSPACE/engine/qemu_ios_jni.c" \
             -Wl,--whole-archive $QEMU_ARCHIVES -Wl,--no-whole-archive \
             -L"$PREFIX/lib" \
+            -lssl -lcrypto \
             -lpixman-1 -lglib-2.0 -lgobject-2.0 -lgio-2.0 -lgmodule-2.0 -lgthread-2.0 \
             -lpcre2-8 -lffi -lz -lm -landroid -llog \
             -o "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
