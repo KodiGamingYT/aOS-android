@@ -8,9 +8,9 @@
 ## Features
 - **Guided Setup Flow:** Clean dark-mode onboarding (`Welcome` → `Choose your first container` → `IPSW Fetch & Boot`).
 - **Supported iOS Targets:**
-  - **iOS 6.1.4** (`iPhone 5` / `n42ap`)
-  - **iOS 7.1.2** (`iPhone 4` / `n90ap`)
-  - **iOS 8.4.1** (`iPhone 5` / `n41ap`)
+  - **iOS 6.1.4** (`iPhone 5` / `n42ap`) - Currently doesn't download (403 Error)
+  - **iOS 7.1.2** (`iPhone 4` / `n90ap`) - Currently doesn't download (403 Error)
+  - **iOS 8.4.1** (`iPhone 5` / `n41ap`) - Downloads and builds the container succesfully.
 - **Direct Apple CDN Integration:** Automatically downloads official `.ipsw` restore images directly from Apple servers, extracts `kernelcache`, `DeviceTree`, and `RootFS`, and removes temporary archives after building the container.
 - **Optional Jailbreak & Cydia Injection:** Pre-configures untethered jailbreak patches and installs **Cydia** during container creation when enabled.
 - **Hardware-Mapped VM Controls:**
@@ -31,9 +31,9 @@ aOS/
 │   ├── build.gradle.kts                      # App module configuration (com.codythelildev.aos)
 │   └── src/main/
 │       ├── AndroidManifest.xml
-│       ├── jniLibs/arm64-v8a/                # Place compiled libqemu-ios.so here
+│       ├── jniLibs/arm64-v8a/                # There will be imported qemu library
 │       └── java/com/codythelildev/aos/
-│           ├── MainActivity.kt               # Navigation, Welcome, Container Wizard & Installer UI
+│           ├── MainActivity.kt               # Navigation, Welcome, Container Wizard, Installer UI & Container Library
 │           ├── AosModels.kt                  # iOS targets, IPSW URLs, VM settings & GPIO keycodes
 │           ├── IpswInstaller.kt              # Apple CDN downloader, IPSW extractor & Cydia patcher
 │           ├── QemuNativeBridge.kt           # JNI interface connecting Kotlin UI to libqemu-ios.so
