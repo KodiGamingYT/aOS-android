@@ -14,7 +14,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-/* Deklaracje punktów wejścia QEMU system emulator */
 extern int qemu_init(int argc, char **argv, char **envp);
 extern void qemu_main_loop(void);
 extern void qemu_cleanup(void);
@@ -24,21 +23,57 @@ static ANativeWindow *g_window = NULL;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_vm_thread;
 static volatile bool g_vm_running = false;
+static bool g_stderr_hooked = false;
 
 static char g_container_path[512];
 static char g_board_config[64];
-static int g_cpu_cores = 4;
-static int g_ram_mb = 1024;
+static int g_cpu_cores = 1;
+static int g_ram_mb = 128;
 static float g_res_scale = 0.75f;
 static int g_renderer_id = 0;
 static bool g_net_enabled = true;
 
-/* Bufor ramki wideo współdzielony między framebufferem QEMU a Android Surface */
-static uint32_t *g_fb_pixels = NULL;
-static int g_fb_width = 640;
-static int g_fb_height = 1136;
+static void *stderr_log_thread(void *arg) {
+    int read_fd = *(int *)arg;
+    free(arg);
+    char buf[512];
+    while (1) {
+        ssize_t n = read(read_fd, buf, sizeof(buf) - 1);
+        if (n <= 0) break;
+        buf[n] = '\0';
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
+            buf[--n] = '\0';
+        }
+        if (n > 0) {
+            LOGE("QEMU_STDERR: %s", buf);
+        }
+    }
+    close(read_fd);
+    return NULL;
+}
 
-/* Funkcja wywoływana przez sterownik LCD/framebuffer w qemu-ios przy odświeżaniu klatki */
+static void hook_stderr_to_logcat(void) {
+    if (g_stderr_hooked) return;
+    int pipefd[2];
+    if (pipe(pipefd) == 0) {
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        setvbuf(stderr, NULL, _IONBF, 0);
+        int *rfd = malloc(sizeof(int));
+        if (rfd) {
+            *rfd = pipefd[0];
+            pthread_t t;
+            if (pthread_create(&t, NULL, stderr_log_thread, rfd) == 0) {
+                pthread_detach(t);
+                g_stderr_hooked = true;
+            } else {
+                close(pipefd[0]);
+                free(rfd);
+            }
+        }
+    }
+}
+
 void aos_push_framebuffer(const uint32_t *src_bgra, int width, int height) {
     pthread_mutex_lock(&g_lock);
     if (!g_window || !src_bgra || width <= 0 || height <= 0) {
@@ -67,7 +102,6 @@ void aos_push_framebuffer(const uint32_t *src_bgra, int width, int height) {
             int sx = (x * width) / dst_w;
             if (sx >= width) sx = width - 1;
             uint32_t p = src_row[sx];
-            /* Konwersja BGRA -> RGBA dla ANativeWindow (WINDOW_FORMAT_RGBA_8888) */
             uint8_t b = (p >> 0) & 0xFF;
             uint8_t g = (p >> 8) & 0xFF;
             uint8_t r = (p >> 16) & 0xFF;
@@ -81,14 +115,18 @@ void aos_push_framebuffer(const uint32_t *src_bgra, int width, int height) {
 }
 
 static const char *resolve_machine_type(const char *board) {
-    if (strcmp(board, "n90ap") == 0) {
-        return "s5l8930x"; /* iPhone 4 (Apple A4) */
-    }
-    return "s5l8950x";     /* iPhone 5 n41ap / n42ap (Apple A6) */
+    (void)board;
+    /* devos50/qemu-ios w tym buildzie ma zarejestrowana maszyne ipod-touch-2g */
+    return "ipod-touch-2g";
+}
+
+static bool file_exists(const char *path) {
+    return path != NULL && access(path, R_OK) == 0;
 }
 
 static void *vm_worker_loop(void *arg) {
     (void)arg;
+    hook_stderr_to_logcat();
 
     char kernel_path[600];
     char dtb_path[600];
@@ -100,35 +138,73 @@ static void *vm_worker_loop(void *arg) {
     snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
     snprintf(dtb_path, sizeof(dtb_path), "%s/devicetree.img3", g_container_path);
     snprintf(rootfs_path, sizeof(rootfs_path), "%s/rootfs.dmg", g_container_path);
-    snprintf(ram_arg, sizeof(ram_arg), "%dM", g_ram_mb);
-    snprintf(smp_arg, sizeof(smp_arg), "%d", g_cpu_cores);
+
+    int safe_ram = g_ram_mb > 0 ? g_ram_mb : 128;
+    int safe_smp = g_cpu_cores > 0 ? g_cpu_cores : 1;
+
+    snprintf(ram_arg, sizeof(ram_arg), "%dM", safe_ram);
+    snprintf(smp_arg, sizeof(smp_arg), "%d", safe_smp);
     snprintf(drive_arg, sizeof(drive_arg), "file=%s,format=raw,if=none,id=nand0", rootfs_path);
 
     const char *machine = resolve_machine_type(g_board_config);
 
-    LOGI("Booting QEMU-iOS machine=%s board=%s ram=%s smp=%s kernel=%s",
-         machine, g_board_config, ram_arg, smp_arg, kernel_path);
+    LOGI("Checking container files in: %s", g_container_path);
+    LOGI("kernelcache=%d, devicetree.img3=%d, rootfs.dmg=%d",
+         file_exists(kernel_path), file_exists(dtb_path), file_exists(rootfs_path));
 
-    char *argv[] = {
-        "qemu-system-arm",
-        "-M", (char *)machine,
-        "-m", ram_arg,
-        "-smp", smp_arg,
-        "-kernel", kernel_path,
-        "-dtb", dtb_path,
-        "-drive", drive_arg,
-        "-serial", "stdio",
-        "-display", "none",
-        NULL
-    };
-    int argc = 15;
+    char *argv[20];
+    int argc = 0;
 
-    qemu_init(argc, argv, NULL);
-    qemu_main_loop();
+    argv[argc++] = "qemu-system-arm";
+    argv[argc++] = "-M";
+    argv[argc++] = (char *)machine;
+    argv[argc++] = "-m";
+    argv[argc++] = ram_arg;
+    argv[argc++] = "-smp";
+    argv[argc++] = smp_arg;
+
+    if (file_exists(kernel_path)) {
+        argv[argc++] = "-kernel";
+        argv[argc++] = kernel_path;
+    } else {
+        LOGE("Missing kernelcache at %s", kernel_path);
+    }
+
+    if (file_exists(dtb_path)) {
+        argv[argc++] = "-dtb";
+        argv[argc++] = dtb_path;
+    } else {
+        LOGE("Missing devicetree.img3 at %s", dtb_path);
+    }
+
+    if (file_exists(rootfs_path)) {
+        argv[argc++] = "-drive";
+        argv[argc++] = drive_arg;
+    } else {
+        LOGE("Missing rootfs.dmg at %s", rootfs_path);
+    }
+
+    argv[argc++] = "-serial";
+    argv[argc++] = "null";
+    argv[argc++] = "-display";
+    argv[argc++] = "none";
+    argv[argc] = NULL;
+
+    LOGI("Booting QEMU-iOS machine=%s board=%s ram=%s smp=%s argc=%d",
+         machine, g_board_config, ram_arg, smp_arg, argc);
+
+    int init_rc = qemu_init(argc, argv, NULL);
+    LOGI("qemu_init returned: %d", init_rc);
+    if (init_rc == 0) {
+        qemu_main_loop();
+    }
     qemu_cleanup();
 
+    pthread_mutex_lock(&g_lock);
     g_vm_running = false;
-    LOGI("QEMU-iOS main loop exited.");
+    pthread_mutex_unlock(&g_lock);
+
+    LOGI("QEMU-iOS main loop exited cleanly.");
     return NULL;
 }
 
@@ -151,13 +227,13 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeStartVm(
         return JNI_TRUE;
     }
 
-    const char *c_path = (*env)->GetStringUTFChars(env, container_path, NULL);
-    const char *c_board = (*env)->GetStringUTFChars(env, board_config, NULL);
+    const char *c_path = container_path ? (*env)->GetStringUTFChars(env, container_path, NULL) : NULL;
+    const char *c_board = board_config ? (*env)->GetStringUTFChars(env, board_config, NULL) : NULL;
 
     strncpy(g_container_path, c_path ? c_path : "", sizeof(g_container_path) - 1);
     g_container_path[sizeof(g_container_path) - 1] = '\0';
 
-    strncpy(g_board_config, c_board ? c_board : "n90ap", sizeof(g_board_config) - 1);
+    strncpy(g_board_config, (c_board && c_board[0] != '\0') ? c_board : "ipod-touch-2g", sizeof(g_board_config) - 1);
     g_board_config[sizeof(g_board_config) - 1] = '\0';
 
     if (c_path) (*env)->ReleaseStringUTFChars(env, container_path, c_path);
@@ -173,10 +249,13 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeStartVm(
 
     if (pthread_create(&g_vm_thread, NULL, vm_worker_loop, NULL) != 0) {
         LOGE("Failed to create QEMU-iOS worker thread");
+        pthread_mutex_lock(&g_lock);
         g_vm_running = false;
+        pthread_mutex_unlock(&g_lock);
         return JNI_FALSE;
     }
 
+    pthread_detach(g_vm_thread);
     return JNI_TRUE;
 }
 
@@ -185,10 +264,12 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeStopVm(JNIEnv *env, jobject th
     (void)env;
     (void)thiz;
 
-    if (!g_vm_running) return;
+    pthread_mutex_lock(&g_lock);
+    bool running = g_vm_running;
+    pthread_mutex_unlock(&g_lock);
+
+    if (!running) return;
     qemu_system_shutdown_request(1);
-    pthread_join(g_vm_thread, NULL);
-    g_vm_running = false;
 }
 
 JNIEXPORT void JNICALL
