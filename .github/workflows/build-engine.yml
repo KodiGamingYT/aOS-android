@@ -207,7 +207,9 @@ jobs:
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
-          ninja qemu-system-arm
+          ARCHIVE_TARGETS=$(grep -oE '^build [^:]+\.(a|fa):' build.ninja | awk '{print $2}' | tr -d ':' | grep -v 'test' | tr '\n' ' ')
+          echo "Building archive targets: $ARCHIVE_TARGETS"
+          ninja $ARCHIVE_TARGETS
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
           QEMU_ARCHIVES=$(find . -path ./qemu-bundle -prune -o -type f \( -name "*.a" -o -name "*.fa" \) ! -name "*test*" -print | tr '\n' ' ')
