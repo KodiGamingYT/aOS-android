@@ -138,10 +138,34 @@ jobs:
           ANDROID_NDK_ROOT="$NDK_DIR" PATH="$TOOLCHAIN/bin:$PATH" make install_sw
           cd ..
 
-      - name: Ensure toolchain pkg-config wrapper exists
+      - name: Ensure toolchain wrappers exist
         run: |
           cp "$PREFIX/bin/aarch64-linux-android29-pkg-config" "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
           chmod +x "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
+
+          cat > "$PREFIX/bin/clang-pic-wrapper" <<EOF
+          #!/usr/bin/env bash
+          args=()
+          for arg in "\$@"; do
+            if [[ "\$arg" != "-fPIE" && "\$arg" != "-fpie" && "\$arg" != "-fno-pic" && "\$arg" != "-fno-PIC" ]]; then
+              args+=("\$arg")
+            fi
+          done
+          exec "$CC" -Qunused-arguments "\${args[@]}" -fPIC -ftls-model=global-dynamic
+          EOF
+          chmod +x "$PREFIX/bin/clang-pic-wrapper"
+
+          cat > "$PREFIX/bin/clangxx-pic-wrapper" <<EOF
+          #!/usr/bin/env bash
+          args=()
+          for arg in "\$@"; do
+            if [[ "\$arg" != "-fPIE" && "\$arg" != "-fpie" && "\$arg" != "-fno-pic" && "\$arg" != "-fno-PIC" ]]; then
+              args+=("\$arg")
+            fi
+          done
+          exec "$CXX" -Qunused-arguments "\${args[@]}" -fPIC -ftls-model=global-dynamic
+          EOF
+          chmod +x "$PREFIX/bin/clangxx-pic-wrapper"
 
       - name: Clone & build qemu-ios core + JNI wrapper into libqemu-ios.so
         run: |
@@ -157,8 +181,8 @@ jobs:
           mkdir -p qemu-ios-build && cd qemu-ios-build
           ../qemu-ios-src/configure \
             --cross-prefix="$TOOLCHAIN/bin/aarch64-linux-android29-" \
-            --cc="$CC" \
-            --cxx="$CXX" \
+            --cc="$PREFIX/bin/clang-pic-wrapper" \
+            --cxx="$PREFIX/bin/clangxx-pic-wrapper" \
             --target-list=arm-softmmu \
             --enable-tcg \
             --disable-pie \
@@ -179,16 +203,17 @@ jobs:
             --disable-tools \
             --disable-guest-agent \
             --disable-werror \
-            --extra-cflags="-fPIC -O2 -I$PREFIX/include -DQEMU_IOS_EMBEDDED=1" \
+            --extra-cflags="-fPIC -ftls-model=global-dynamic -O2 -I$PREFIX/include -DQEMU_IOS_EMBEDDED=1" \
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
+          sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
           ninja libqemu-arm-softmmu.fa
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
           QEMU_ARCHIVES=$(find . -path ./qemu-bundle -prune -o -type f \( -name "*.a" -o -name "*.fa" \) ! -name "*testfloat*" ! -name "*testqapi*" -print | tr '\n' ' ')
           echo "Linking archives: $QEMU_ARCHIVES"
 
-          "$CC" -shared -fPIC -O2 \
+          "$PREFIX/bin/clang-pic-wrapper" -shared -O2 \
             -Wl,-z,max-page-size=16384 \
             -I"$GITHUB_WORKSPACE/qemu-ios-src/include" \
             -I"$PREFIX/include" \
