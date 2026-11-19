@@ -7,13 +7,17 @@ object QemuNativeBridge {
 
     private const val TAG = "QemuNativeBridge"
     private var isLibraryLoaded = false
+    var lastLoadError: String? = null
+        private set
 
     init {
         try {
             System.loadLibrary("qemu-ios")
             isLibraryLoaded = true
+            lastLoadError = null
         } catch (e: UnsatisfiedLinkError) {
-            Log.w(TAG, "libqemu-ios.so not found in jniLibs/arm64-v8a; running in UI stub mode.")
+            lastLoadError = e.message ?: "Unknown UnsatisfiedLinkError"
+            Log.e(TAG, "Failed to load libqemu-ios.so: $lastLoadError")
             isLibraryLoaded = false
         }
     }
