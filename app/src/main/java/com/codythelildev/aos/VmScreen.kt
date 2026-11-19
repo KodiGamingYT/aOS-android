@@ -24,6 +24,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -42,7 +44,7 @@ fun VmScreen(
     val defaultStatus = if (QemuNativeBridge.isEngineAvailable()) {
         "QEMU Engine Active"
     } else {
-        "Waiting for libqemu-ios.so"
+        QemuNativeBridge.lastLoadError ?: "Waiting for libqemu-ios.so"
     }
     var statusText by remember { mutableStateOf(defaultStatus) }
 
@@ -96,7 +98,12 @@ fun VmScreen(
                 )
             }
 
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+            ) {
                 Text(
                     text = "${target.shortDeviceName} • ${target.title}",
                     color = Color.White,
@@ -105,8 +112,11 @@ fun VmScreen(
                 )
                 Text(
                     text = statusText,
-                    color = if (QemuNativeBridge.isEngineAvailable()) Color(0xFF30D158) else Color(0xFFFF9F0A),
-                    fontSize = 11.sp
+                    color = if (QemuNativeBridge.isEngineAvailable()) Color(0xFF30D158) else Color(0xFFFF453A),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
