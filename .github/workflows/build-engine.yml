@@ -208,6 +208,9 @@ jobs:
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
           QEMU_ARCHIVES=$(awk '/^build qemu-system-arm:/,/^$/' build.ninja | grep -oE '[^ ]+\.(a|fa)' | sort -u | tr '\n' ' ')
+          if grep -q 'subprojects/libvhost-user/libvhost-user.a' build.ninja; then
+            QEMU_ARCHIVES="$QEMU_ARCHIVES subprojects/libvhost-user/libvhost-user.a"
+          fi
           echo "Building & linking all archives: $QEMU_ARCHIVES"
           ninja $QEMU_ARCHIVES
 
