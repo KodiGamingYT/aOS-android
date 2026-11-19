@@ -74,8 +74,8 @@ jobs:
           pkg-config = '$PREFIX/bin/aarch64-linux-android29-pkg-config'
 
           [built-in options]
-          c_args = ['-fPIC', '-O2', '-I$PREFIX/include']
-          cpp_args = ['-fPIC', '-O2', '-I$PREFIX/include']
+          c_args = ['-fPIC', '-Os', '-I$PREFIX/include']
+          cpp_args = ['-fPIC', '-Os', '-I$PREFIX/include']
           c_link_args = ['-L$PREFIX/lib', '-Wl,-z,max-page-size=16384']
           cpp_link_args = ['-L$PREFIX/lib', '-Wl,-z,max-page-size=16384']
 
@@ -93,21 +93,21 @@ jobs:
           # 1. zlib
           curl -L https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz -o zlib.tar.gz
           tar xf zlib.tar.gz && cd zlib-1.3.1
-          CHOST=aarch64-linux-android CFLAGS="-fPIC -O2" ./configure --prefix="$PREFIX" --static
+          CHOST=aarch64-linux-android CFLAGS="-fPIC -Os" ./configure --prefix="$PREFIX" --static
           make -j$(nproc) && make install
           cd ..
 
           # 2. libffi
           curl -L https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz -o libffi.tar.gz
           tar xf libffi.tar.gz && cd libffi-3.4.6
-          CFLAGS="-fPIC -O2" ./configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static
+          CFLAGS="-fPIC -Os" ./configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static
           make -j$(nproc) && make install
           cd ..
 
           # 3. pcre2
           curl -L https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.43/pcre2-10.43.tar.gz -o pcre2.tar.gz
           tar xf pcre2.tar.gz && cd pcre2-10.43
-          CFLAGS="-fPIC -O2" ./configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static
+          CFLAGS="-fPIC -Os" ./configure --host=aarch64-linux-android --prefix="$PREFIX" --disable-shared --enable-static
           make -j$(nproc) && make install
           cd ..
 
@@ -203,18 +203,19 @@ jobs:
             --disable-tools \
             --disable-guest-agent \
             --disable-werror \
-            --extra-cflags="-fPIC -ftls-model=global-dynamic -O2 -I$PREFIX/include -DQEMU_IOS_EMBEDDED=1" \
+            --extra-cflags="-fPIC -ftls-model=global-dynamic -Os -ffunction-sections -fdata-sections -I$PREFIX/include -DQEMU_IOS_EMBEDDED=1" \
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
-          ninja libqemu-arm-softmmu.fa
+          ninja qemu-system-arm
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
-          QEMU_ARCHIVES=$(find . -path ./qemu-bundle -prune -o -type f \( -name "*.a" -o -name "*.fa" \) ! -name "*testfloat*" ! -name "*testqapi*" -print | tr '\n' ' ')
+          QEMU_ARCHIVES=$(find . -path ./qemu-bundle -prune -o -type f \( -name "*.a" -o -name "*.fa" \) ! -name "*test*" -print | tr '\n' ' ')
           echo "Linking archives: $QEMU_ARCHIVES"
 
-          "$PREFIX/bin/clang-pic-wrapper" -shared -O2 \
+          "$PREFIX/bin/clang-pic-wrapper" -shared -Os -ffunction-sections -fdata-sections \
             -Wl,-z,max-page-size=16384 \
+            -Wl,--gc-sections \
             -I"$GITHUB_WORKSPACE/qemu-ios-src/include" \
             -I"$PREFIX/include" \
             -I"$PREFIX/include/glib-2.0" \
@@ -227,7 +228,7 @@ jobs:
             -lpcre2-8 -lffi -lz -lm -landroid -llog \
             -o "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
 
-          "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
+          "$STRIP" --strip-all "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
           ls -lh "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
 
       - name: Upload libqemu-ios.so Artifact
