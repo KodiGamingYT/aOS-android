@@ -207,7 +207,7 @@ jobs:
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
-          FA_ARCHIVES=$(grep -oE '^build [^:]+\.fa:' build.ninja | awk '{print $2}' | tr -d ':' | grep -v 'user' | sort -u | tr '\n' ' ')
+          FA_ARCHIVES=$(grep -oE '^build [^:]+\.fa:' build.ninja | awk '{print $2}' | tr -d ':' | grep -Ev 'user|tests' | sort -u | tr '\n' ' ')
           A_ARCHIVES=$(grep -oE '^build [^:]+\.a:' build.ninja | awk '{print $2}' | tr -d ':' | grep -v 'test' | sort -u | tr '\n' ' ')
           echo "Whole-archive (.fa): $FA_ARCHIVES"
           echo "Standard-archive (.a): $A_ARCHIVES"
@@ -228,7 +228,7 @@ jobs:
             -Wl,--start-group $A_ARCHIVES -Wl,--end-group \
             -L"$PREFIX/lib" \
             -lssl -lcrypto \
-            -lpixman-1 -lglib-2.0 -lgobject-2.0 -lgio-2.0 -lgmodule-2.0 -lgthread-2.0 \
+            -lpixman-1 -lgio-2.0 -lgobject-2.0 -lgmodule-2.0 -lgthread-2.0 -lglib-2.0 -lintl \
             -lpcre2-8 -lffi -lz -lm -landroid -llog -ldl \
             -o "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
 
