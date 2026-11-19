@@ -207,8 +207,8 @@ jobs:
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
-          QEMU_ARCHIVES=$(awk '/^build qemu-system-arm:/,/^$/' build.ninja | sed 's/||.*//' | grep -oE '[^ ]+\.(a|fa)' | sort -u | tr '\n' ' ')
-          echo "Building & linking exact archives: $QEMU_ARCHIVES"
+          QEMU_ARCHIVES=$(awk '/^build qemu-system-arm:/,/^$/' build.ninja | grep -oE '[^ ]+\.(a|fa)' | sort -u | tr '\n' ' ')
+          echo "Building & linking all archives: $QEMU_ARCHIVES"
           ninja $QEMU_ARCHIVES
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
@@ -216,6 +216,7 @@ jobs:
             -Wl,-z,max-page-size=16384 \
             -Wl,--gc-sections \
             -Wl,--allow-multiple-definition \
+            -Wl,--no-undefined \
             -I"$GITHUB_WORKSPACE/qemu-ios-src/include" \
             -I"$PREFIX/include" \
             -I"$PREFIX/include/glib-2.0" \
@@ -225,7 +226,7 @@ jobs:
             -L"$PREFIX/lib" \
             -lssl -lcrypto \
             -lpixman-1 -lglib-2.0 -lgobject-2.0 -lgio-2.0 -lgmodule-2.0 -lgthread-2.0 \
-            -lpcre2-8 -lffi -lz -lm -landroid -llog \
+            -lpcre2-8 -lffi -lz -lm -landroid -llog -ldl \
             -o "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
 
           "$STRIP" --strip-all "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
