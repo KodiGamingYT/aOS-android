@@ -207,12 +207,11 @@ jobs:
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
-          QEMU_ARCHIVES=$(awk '/^build qemu-system-arm:/,/^$/' build.ninja | grep -oE '[^ ]+\.(a|fa)' | sort -u | tr '\n' ' ')
-          if grep -q 'subprojects/libvhost-user/libvhost-user.a' build.ninja; then
-            QEMU_ARCHIVES="$QEMU_ARCHIVES subprojects/libvhost-user/libvhost-user.a"
-          fi
-          echo "Building & linking all archives: $QEMU_ARCHIVES"
-          ninja $QEMU_ARCHIVES
+          FA_ARCHIVES=$(grep -oE '^build [^:]+\.fa:' build.ninja | awk '{print $2}' | tr -d ':' | grep -v 'user' | sort -u | tr '\n' ' ')
+          A_ARCHIVES=$(grep -oE '^build [^:]+\.a:' build.ninja | awk '{print $2}' | tr -d ':' | grep -v 'test' | sort -u | tr '\n' ' ')
+          echo "Whole-archive (.fa): $FA_ARCHIVES"
+          echo "Standard-archive (.a): $A_ARCHIVES"
+          ninja $FA_ARCHIVES $A_ARCHIVES
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
           "$PREFIX/bin/clang-pic-wrapper" -shared -Os -ffunction-sections -fdata-sections \
@@ -225,7 +224,8 @@ jobs:
             -I"$PREFIX/include/glib-2.0" \
             -I"$PREFIX/lib/glib-2.0/include" \
             "$GITHUB_WORKSPACE/engine/qemu_ios_jni.c" \
-            -Wl,--whole-archive $QEMU_ARCHIVES -Wl,--no-whole-archive \
+            -Wl,--whole-archive $FA_ARCHIVES -Wl,--no-whole-archive \
+            -Wl,--start-group $A_ARCHIVES -Wl,--end-group \
             -L"$PREFIX/lib" \
             -lssl -lcrypto \
             -lpixman-1 -lglib-2.0 -lgobject-2.0 -lgio-2.0 -lgmodule-2.0 -lgthread-2.0 \
