@@ -2,7 +2,10 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <android/log.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,9 +13,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "qemu/osdep.h"
+#include "ui/console.h"
+#include "ui/input.h"
+
 #define LOG_TAG "QemuIosEngine"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 extern int qemu_init(int argc, char **argv, char **envp);
 extern void qemu_main_loop(void);
@@ -24,6 +29,7 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_vm_thread;
 static volatile bool g_vm_running = false;
 static bool g_stderr_hooked = false;
+static int g_saved_kotlin_stderr_fd = -1;
 
 static char g_container_path[512];
 static char g_board_config[64];
@@ -33,37 +39,111 @@ static float g_res_scale = 0.75f;
 static int g_renderer_id = 0;
 static bool g_net_enabled = true;
 
-static void *stderr_log_thread(void *arg) {
+static void write_both_logs(int prio, const char *fmt, ...) {
+    char msg[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    __android_log_print(prio, LOG_TAG, "%s", msg);
+
+    if (g_saved_kotlin_stderr_fd >= 0) {
+        dprintf(g_saved_kotlin_stderr_fd, "[QemuIosEngine] %s\n", msg);
+    }
+}
+
+#define LOGI(...) write_both_logs(ANDROID_LOG_INFO, __VA_ARGS__)
+#define LOGE(...) write_both_logs(ANDROID_LOG_ERROR, __VA_ARGS__)
+
+static void on_process_exit(void) {
+    if (g_saved_kotlin_stderr_fd >= 0) {
+        dprintf(g_saved_kotlin_stderr_fd, "[QemuIosEngine] PROCESS EXITING (atexit triggered - QEMU likely called exit(1))\n");
+    }
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "PROCESS EXITING (atexit triggered)");
+}
+
+static void on_fatal_signal(int sig, siginfo_t *info, void *ucontext) {
+    (void)ucontext;
+    if (g_saved_kotlin_stderr_fd >= 0) {
+        dprintf(
+            g_saved_kotlin_stderr_fd,
+            "[QemuIosEngine] FATAL SIGNAL %d (%s) at addr=%p\n",
+            sig,
+            strsignal(sig),
+            info ? info->si_addr : NULL
+        );
+    }
+    __android_log_print(
+        ANDROID_LOG_FATAL,
+        LOG_TAG,
+        "FATAL SIGNAL %d (%s) at addr=%p",
+        sig,
+        strsignal(sig),
+        info ? info->si_addr : NULL
+    );
+    _exit(128 + sig);
+}
+
+static void install_crash_handlers(void) {
+    atexit(on_process_exit);
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = on_fatal_signal;
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGILL, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+}
+
+static void *stderr_tee_thread(void *arg) {
     int read_fd = *(int *)arg;
     free(arg);
     char buf[512];
     while (1) {
         ssize_t n = read(read_fd, buf, sizeof(buf) - 1);
         if (n <= 0) break;
+
+        if (g_saved_kotlin_stderr_fd >= 0) {
+            ssize_t ignored = write(g_saved_kotlin_stderr_fd, buf, (size_t)n);
+            (void)ignored;
+        }
+
         buf[n] = '\0';
         while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
             buf[--n] = '\0';
         }
         if (n > 0) {
-            LOGE("QEMU_STDERR: %s", buf);
+            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "QEMU_STDERR: %s", buf);
         }
     }
     close(read_fd);
     return NULL;
 }
 
-static void hook_stderr_to_logcat(void) {
+static void hook_stderr_preserve_file(void) {
     if (g_stderr_hooked) return;
+
+    /* Zachowujemy deskryptor pliku z Documents/aOS_logs/ ustawiony przez Os.dup2 w Kotlinie */
+    g_saved_kotlin_stderr_fd = dup(STDERR_FILENO);
+
     int pipefd[2];
     if (pipe(pipefd) == 0) {
         dup2(pipefd[1], STDERR_FILENO);
+        dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
         setvbuf(stderr, NULL, _IONBF, 0);
+        setvbuf(stdout, NULL, _IONBF, 0);
+
         int *rfd = malloc(sizeof(int));
         if (rfd) {
             *rfd = pipefd[0];
             pthread_t t;
-            if (pthread_create(&t, NULL, stderr_log_thread, rfd) == 0) {
+            if (pthread_create(&t, NULL, stderr_tee_thread, rfd) == 0) {
                 pthread_detach(t);
                 g_stderr_hooked = true;
             } else {
@@ -114,9 +194,51 @@ void aos_push_framebuffer(const uint32_t *src_bgra, int width, int height) {
     pthread_mutex_unlock(&g_lock);
 }
 
+static DisplaySurface *g_qemu_surface = NULL;
+
+static void aos_dpy_gfx_update(DisplayChangeListener *dcl, int x, int y, int w, int h) {
+    (void)dcl;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    if (g_qemu_surface) {
+        int width = surface_width(g_qemu_surface);
+        int height = surface_height(g_qemu_surface);
+        const uint32_t *data = (const uint32_t *)surface_data(g_qemu_surface);
+        aos_push_framebuffer(data, width, height);
+    }
+}
+
+static void aos_dpy_gfx_switch(DisplayChangeListener *dcl, struct DisplaySurface *new_surface) {
+    (void)dcl;
+    g_qemu_surface = new_surface;
+    if (g_qemu_surface) {
+        int width = surface_width(g_qemu_surface);
+        int height = surface_height(g_qemu_surface);
+        const uint32_t *data = (const uint32_t *)surface_data(g_qemu_surface);
+        aos_push_framebuffer(data, width, height);
+    }
+}
+
+static void aos_dpy_refresh(DisplayChangeListener *dcl) {
+    graphic_hw_update(dcl->con);
+}
+
+static const DisplayChangeListenerOps aos_dpy_ops = {
+    .dpy_name = "aos-android-surface",
+    .dpy_gfx_update = aos_dpy_gfx_update,
+    .dpy_gfx_switch = aos_dpy_gfx_switch,
+    .dpy_refresh = aos_dpy_refresh,
+};
+
+static DisplayChangeListener g_aos_dcl = {
+    .ops = &aos_dpy_ops,
+};
+
 static const char *resolve_machine_type(const char *board) {
     (void)board;
-    /* devos50/qemu-ios w tym buildzie ma zarejestrowana maszyne ipod-touch-2g */
+    /* devos50/qemu-ios udostepnia maszyne ipod-touch-2g (S5L8720) */
     return "ipod-touch-2g";
 }
 
@@ -126,33 +248,39 @@ static bool file_exists(const char *path) {
 
 static void *vm_worker_loop(void *arg) {
     (void)arg;
-    hook_stderr_to_logcat();
+    hook_stderr_preserve_file();
+    install_crash_handlers();
 
     char kernel_path[600];
-    char dtb_path[600];
+    char kernel_raw_path[600];
+    char bootrom_path[600];
     char rootfs_path[600];
     char ram_arg[32];
     char smp_arg[32];
     char drive_arg[700];
 
     snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
-    snprintf(dtb_path, sizeof(dtb_path), "%s/devicetree.img3", g_container_path);
+    snprintf(kernel_raw_path, sizeof(kernel_raw_path), "%s/kernelcache.raw", g_container_path);
+    snprintf(bootrom_path, sizeof(bootrom_path), "%s/bootrom.bin", g_container_path);
     snprintf(rootfs_path, sizeof(rootfs_path), "%s/rootfs.dmg", g_container_path);
 
-    int safe_ram = g_ram_mb > 0 ? g_ram_mb : 128;
-    int safe_smp = g_cpu_cores > 0 ? g_cpu_cores : 1;
+    const char *machine = resolve_machine_type(g_board_config);
+
+    /* ipod-touch-2g w devos50/qemu-ios wymaga dokladnie 128M RAM i 1 rdzenia CPU */
+    int safe_ram = 128;
+    int safe_smp = 1;
 
     snprintf(ram_arg, sizeof(ram_arg), "%dM", safe_ram);
     snprintf(smp_arg, sizeof(smp_arg), "%d", safe_smp);
     snprintf(drive_arg, sizeof(drive_arg), "file=%s,format=raw,if=none,id=nand0", rootfs_path);
 
-    const char *machine = resolve_machine_type(g_board_config);
+    const char *selected_kernel = file_exists(kernel_raw_path) ? kernel_raw_path : kernel_path;
 
     LOGI("Checking container files in: %s", g_container_path);
-    LOGI("kernelcache=%d, devicetree.img3=%d, rootfs.dmg=%d",
-         file_exists(kernel_path), file_exists(dtb_path), file_exists(rootfs_path));
+    LOGI("kernel=%s (exists=%d), bootrom=%d, rootfs.dmg=%d",
+         selected_kernel, file_exists(selected_kernel), file_exists(bootrom_path), file_exists(rootfs_path));
 
-    char *argv[20];
+    char *argv[24];
     int argc = 0;
 
     argv[argc++] = "qemu-system-arm";
@@ -163,18 +291,16 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = "-smp";
     argv[argc++] = smp_arg;
 
-    if (file_exists(kernel_path)) {
-        argv[argc++] = "-kernel";
-        argv[argc++] = kernel_path;
-    } else {
-        LOGE("Missing kernelcache at %s", kernel_path);
+    if (file_exists(bootrom_path)) {
+        argv[argc++] = "-bios";
+        argv[argc++] = bootrom_path;
     }
 
-    if (file_exists(dtb_path)) {
-        argv[argc++] = "-dtb";
-        argv[argc++] = dtb_path;
+    if (file_exists(selected_kernel)) {
+        argv[argc++] = "-kernel";
+        argv[argc++] = (char *)selected_kernel;
     } else {
-        LOGE("Missing devicetree.img3 at %s", dtb_path);
+        LOGE("Missing kernelcache at %s", selected_kernel);
     }
 
     if (file_exists(rootfs_path)) {
@@ -185,18 +311,22 @@ static void *vm_worker_loop(void *arg) {
     }
 
     argv[argc++] = "-serial";
-    argv[argc++] = "null";
+    argv[argc++] = "stderr";
     argv[argc++] = "-display";
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Booting QEMU-iOS machine=%s board=%s ram=%s smp=%s argc=%d",
+    LOGI("Calling qemu_init: machine=%s board=%s ram=%s smp=%s argc=%d",
          machine, g_board_config, ram_arg, smp_arg, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
+
     if (init_rc == 0) {
+        register_displaychangelistener(&g_aos_dcl);
+        LOGI("DisplayChangeListener registered, entering qemu_main_loop()");
         qemu_main_loop();
+        unregister_displaychangelistener(&g_aos_dcl);
     }
     qemu_cleanup();
 
