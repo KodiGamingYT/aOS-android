@@ -26,7 +26,7 @@ enum class IosTarget(
         shortDeviceName = "iPhone 4",
         deviceModel = "iPhone 4 (iPhone3,1)",
         boardConfig = "n90ap",
-        ipswUrl = "https://secure-appldnld.apple.com/iOS7.1/031-4812.20140627.cq6fd/iPhone3,1_7.1.2_11D257_Restore.ipsw",
+        ipswUrl = "https://secure-appldnld.apple.com/iOS7.1/031-4812.20140627.cq6y8/iPhone3,1_7.1.2_11D257_Restore.ipsw",
         defaultRamMb = 512,
         supportsCydia = true
     ),
