@@ -4,6 +4,7 @@
 #include <android/log.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <glib.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -56,9 +57,25 @@ static void write_both_logs(int prio, const char *fmt, ...) {
 #define LOGI(...) write_both_logs(ANDROID_LOG_INFO, __VA_ARGS__)
 #define LOGE(...) write_both_logs(ANDROID_LOG_ERROR, __VA_ARGS__)
 
+static void aos_glib_log_handler(const gchar *log_domain,
+                                 GLogLevelFlags log_level,
+                                 const gchar *message,
+                                 gpointer user_data) {
+    (void)log_level;
+    (void)user_data;
+    if (g_saved_kotlin_stderr_fd >= 0) {
+        dprintf(g_saved_kotlin_stderr_fd, "[GLib:%s] %s\n",
+                log_domain ? log_domain : "default",
+                message ? message : "(null)");
+    }
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "[GLib:%s] %s",
+                        log_domain ? log_domain : "default",
+                        message ? message : "(null)");
+}
+
 static void on_process_exit(void) {
     if (g_saved_kotlin_stderr_fd >= 0) {
-        dprintf(g_saved_kotlin_stderr_fd, "[QemuIosEngine] PROCESS EXITING (atexit triggered - QEMU likely called exit(1))\n");
+        dprintf(g_saved_kotlin_stderr_fd, "[QemuIosEngine] PROCESS EXITING (atexit triggered)\n");
     }
     __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "PROCESS EXITING (atexit triggered)");
 }
@@ -87,6 +104,7 @@ static void on_fatal_signal(int sig, siginfo_t *info, void *ucontext) {
 
 static void install_crash_handlers(void) {
     atexit(on_process_exit);
+    g_log_set_default_handler(aos_glib_log_handler, NULL);
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -128,7 +146,6 @@ static void *stderr_tee_thread(void *arg) {
 static void hook_stderr_preserve_file(void) {
     if (g_stderr_hooked) return;
 
-    /* Zachowujemy deskryptor pliku z Documents/aOS_logs/ ustawiony przez Os.dup2 w Kotlinie */
     g_saved_kotlin_stderr_fd = dup(STDERR_FILENO);
 
     int pipefd[2];
@@ -238,7 +255,6 @@ static DisplayChangeListener g_aos_dcl = {
 
 static const char *resolve_machine_type(const char *board) {
     (void)board;
-    /* devos50/qemu-ios udostepnia maszyne ipod-touch-2g (S5L8720) */
     return "ipod-touch-2g";
 }
 
@@ -266,7 +282,6 @@ static void *vm_worker_loop(void *arg) {
 
     const char *machine = resolve_machine_type(g_board_config);
 
-    /* ipod-touch-2g w devos50/qemu-ios wymaga dokladnie 128M RAM i 1 rdzenia CPU */
     int safe_ram = 128;
     int safe_smp = 1;
 
