@@ -1,6 +1,10 @@
 name: Build libqemu-ios.so Artifact
 
 on:
+  push:
+    paths:
+      - ".github/workflows/build-engine.yml"
+      - "engine/**"
   workflow_dispatch:
 
 jobs:
@@ -222,6 +226,7 @@ jobs:
             -I"$GITHUB_WORKSPACE/qemu-ios-build" \
             -I"$GITHUB_WORKSPACE/qemu-ios-src/include" \
             -I"$PREFIX/include" \
+            -I"$PREFIX/include/pixman-1" \
             -I"$PREFIX/include/glib-2.0" \
             -I"$PREFIX/lib/glib-2.0/include" \
             "$GITHUB_WORKSPACE/engine/qemu_ios_jni.c" \
