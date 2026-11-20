@@ -1,6 +1,7 @@
 package com.codythelildev.aos
 
 import android.os.Bundle
+import android.util.Log
 import android.view.SurfaceHolder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -33,7 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 enum class AosRoute {
     WELCOME,
@@ -48,6 +48,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        QemuNativeBridge.initLogger(this)
+        QemuNativeBridge.logToDocuments("MainActivity", "onCreate() started")
+
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            QemuNativeBridge.logToDocuments(
+                "UNCAUGHT_CRASH",
+                "Thread '${thread.name}' crashed:\n${Log.getStackTraceString(throwable)}"
+            )
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 AosAppRoot()
@@ -56,6 +69,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        QemuNativeBridge.logToDocuments("MainActivity", "onDestroy() called -> stopping VM")
         QemuNativeBridge.stopVm()
         super.onDestroy()
     }
@@ -91,15 +105,21 @@ fun AosAppRoot() {
 
     fun refreshContainers() {
         installedContainers = installer.getInstalledContainers()
+        QemuNativeBridge.logToDocuments("MainActivity", "Refreshed containers count=${installedContainers.size}")
     }
 
     fun prepareBootContainer(target: IosTarget) {
+        QemuNativeBridge.logToDocuments(
+            "MainActivity",
+            "prepareBootContainer() -> target=${target.id}, board=${target.boardConfig}, ram=${vmSettings.ramMb}MB"
+        )
         selectedTarget = target
         isVmBootTriggered = false
         currentRoute = AosRoute.RUNNING_VM
     }
 
     fun stopAndExitVm() {
+        QemuNativeBridge.logToDocuments("MainActivity", "stopAndExitVm() triggered by user")
         isVmBootTriggered = false
         QemuNativeBridge.detachSurface()
         QemuNativeBridge.stopVm()
@@ -114,7 +134,10 @@ fun AosAppRoot() {
     when (currentRoute) {
         AosRoute.WELCOME -> {
             WelcomeScreen(
-                onGetStarted = { currentRoute = AosRoute.CHOOSE_CONTAINER },
+                onGetStarted = {
+                    QemuNativeBridge.logToDocuments("MainActivity", "Route -> CHOOSE_CONTAINER")
+                    currentRoute = AosRoute.CHOOSE_CONTAINER
+                },
                 onOpenSettings = {
                     previousRoute = AosRoute.WELCOME
                     currentRoute = AosRoute.SETTINGS
@@ -126,10 +149,12 @@ fun AosAppRoot() {
             ContainerLibraryScreen(
                 containers = installedContainers,
                 onBootContainer = { container ->
+                    QemuNativeBridge.logToDocuments("MainActivity", "Clicked boot on ${container.target.title}")
                     vmSettings = vmSettings.copy(ramMb = container.target.defaultRamMb)
                     prepareBootContainer(container.target)
                 },
                 onDeleteContainer = { container ->
+                    QemuNativeBridge.logToDocuments("MainActivity", "Deleting container ${container.target.id}")
                     installer.deleteContainer(container.target)
                     refreshContainers()
                     if (installer.getInstalledContainers().isEmpty()) {
@@ -168,13 +193,19 @@ fun AosAppRoot() {
                 },
                 onProceed = {
                     if (installer.isContainerInstalled(selectedTarget)) {
+                        QemuNativeBridge.logToDocuments("MainActivity", "Container already installed, booting ${selectedTarget.id}")
                         prepareBootContainer(selectedTarget)
                     } else {
+                        QemuNativeBridge.logToDocuments("MainActivity", "Starting IPSW install for ${selectedTarget.id} (cydia=$installCydia)")
                         currentRoute = AosRoute.INSTALLING
                         scope.launch {
                             installer.installContainer(selectedTarget, installCydia).collect { state ->
                                 installProgress = state
+                                if (state.errorMessage != null) {
+                                    QemuNativeBridge.logToDocuments("IpswInstaller", "ERROR: ${state.errorMessage}")
+                                }
                                 if (state.isCompleted) {
+                                    QemuNativeBridge.logToDocuments("IpswInstaller", "Install completed for ${selectedTarget.id}")
                                     refreshContainers()
                                     prepareBootContainer(selectedTarget)
                                 }
@@ -190,6 +221,7 @@ fun AosAppRoot() {
                 target = selectedTarget,
                 progress = installProgress,
                 onRetry = {
+                    QemuNativeBridge.logToDocuments("MainActivity", "Retrying install for ${selectedTarget.id}")
                     scope.launch {
                         installer.installContainer(selectedTarget, installCydia).collect { state ->
                             installProgress = state
@@ -201,6 +233,7 @@ fun AosAppRoot() {
                     }
                 },
                 onCancel = {
+                    QemuNativeBridge.logToDocuments("MainActivity", "Install cancelled")
                     refreshContainers()
                     currentRoute = if (installedContainers.isNotEmpty()) {
                         AosRoute.CONTAINER_LIBRARY
@@ -227,6 +260,10 @@ fun AosAppRoot() {
                 },
                 onAttachSurface = { holder: SurfaceHolder ->
                     val surface = holder.surface
+                    QemuNativeBridge.logToDocuments(
+                        "MainActivity",
+                        "VmScreen onAttachSurface -> surface=$surface, isValid=${surface?.isValid}, isVmBootTriggered=$isVmBootTriggered"
+                    )
                     if (surface != null && surface.isValid) {
                         QemuNativeBridge.attachSurface(surface)
                         if (!isVmBootTriggered) {
@@ -235,6 +272,10 @@ fun AosAppRoot() {
                             val targetSnapshot = selectedTarget
                             val settingsSnapshot = vmSettings
                             scope.launch(Dispatchers.IO) {
+                                QemuNativeBridge.logToDocuments(
+                                    "MainActivity",
+                                    "Launching QemuNativeBridge.startVm on Dispatchers.IO for ${targetSnapshot.id}"
+                                )
                                 QemuNativeBridge.startVm(
                                     containerPath = containerDir.absolutePath,
                                     boardConfig = targetSnapshot.boardConfig,
@@ -249,6 +290,7 @@ fun AosAppRoot() {
                     }
                 },
                 onDetachSurface = {
+                    QemuNativeBridge.logToDocuments("MainActivity", "VmScreen onDetachSurface")
                     QemuNativeBridge.detachSurface()
                 },
                 onStopVm = {
