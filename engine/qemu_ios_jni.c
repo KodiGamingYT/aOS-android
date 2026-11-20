@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "qemu/osdep.h"
+#include "qemu/module.h"
 #include "hw/boards.h"
 #include "qom/object.h"
 #include "ui/console.h"
@@ -269,7 +270,9 @@ static void strip_machine_suffix(const char *raw_name, char *out, size_t out_len
 static void detect_ios_machine(const char *preferred_board, char *out_machine, size_t out_len) {
     out_machine[0] = '\0';
 
-    /* 1. Bezposrednie dopasowanie znanych nazw klas QOM */
+    /* Inicjalizujemy typy QOM wczesniej, zeby moc przejrzec wszystkie zarejestrowane maszyny */
+    module_call_init(MODULE_INIT_QOM);
+
     const char *candidates[] = {
         preferred_board,
         "n72ap",
@@ -295,7 +298,6 @@ static void detect_ios_machine(const char *preferred_board, char *out_machine, s
         }
     }
 
-    /* 2. Przeszukujemy wszystkie zarejestrowane klasy TYPE_MACHINE w QOM */
     GSList *machines = object_class_get_list(TYPE_MACHINE, false);
     char fallback_machine[64] = {0};
 
@@ -409,7 +411,7 @@ static void *vm_worker_loop(void *arg) {
     }
 
     argv[argc++] = "-serial";
-    argv[argc++] = "stderr";
+    argv[argc++] = "stdio";
     argv[argc++] = "-display";
     argv[argc++] = "none";
     argv[argc] = NULL;
