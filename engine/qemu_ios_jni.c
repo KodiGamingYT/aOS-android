@@ -15,6 +15,8 @@
 #include <unistd.h>
 
 #include "qemu/osdep.h"
+#include "hw/boards.h"
+#include "qom/object.h"
 #include "ui/console.h"
 #include "ui/input.h"
 
@@ -253,9 +255,89 @@ static DisplayChangeListener g_aos_dcl = {
     .ops = &aos_dpy_ops,
 };
 
-static const char *resolve_machine_type(const char *board) {
-    (void)board;
-    return "ipod-touch-2g";
+static void strip_machine_suffix(const char *raw_name, char *out, size_t out_len) {
+    strncpy(out, raw_name, out_len - 1);
+    out[out_len - 1] = '\0';
+    size_t len = strlen(out);
+    const char *suffix = "-machine";
+    size_t slen = strlen(suffix);
+    if (len > slen && strcmp(out + len - slen, suffix) == 0) {
+        out[len - slen] = '\0';
+    }
+}
+
+static void detect_ios_machine(const char *preferred_board, char *out_machine, size_t out_len) {
+    out_machine[0] = '\0';
+
+    /* 1. Bezposrednie dopasowanie znanych nazw klas QOM */
+    const char *candidates[] = {
+        preferred_board,
+        "n72ap",
+        "s5l8720",
+        "ipod",
+        "ipod-touch",
+        "iphone",
+        "n90ap",
+        "n41ap",
+        "n42ap",
+        NULL
+    };
+
+    for (int i = 0; candidates[i] != NULL; i++) {
+        if (candidates[i][0] == '\0') continue;
+        char type_name[128];
+        snprintf(type_name, sizeof(type_name), "%s-machine", candidates[i]);
+        if (object_class_by_name(type_name) != NULL || object_class_by_name(candidates[i]) != NULL) {
+            strncpy(out_machine, candidates[i], out_len - 1);
+            out_machine[out_len - 1] = '\0';
+            LOGI("Direct match for QEMU machine class: '%s'", out_machine);
+            return;
+        }
+    }
+
+    /* 2. Przeszukujemy wszystkie zarejestrowane klasy TYPE_MACHINE w QOM */
+    GSList *machines = object_class_get_list(TYPE_MACHINE, false);
+    char fallback_machine[64] = {0};
+
+    for (GSList *el = machines; el != NULL; el = el->next) {
+        ObjectClass *oc = OBJECT_CLASS(el->data);
+        if (object_class_is_abstract(oc)) continue;
+
+        const char *cls_name = object_class_get_name(oc);
+        char clean_name[64];
+        strip_machine_suffix(cls_name, clean_name, sizeof(clean_name));
+        LOGI("Available QOM machine: '%s' (cli: '%s')", cls_name, clean_name);
+
+        if (strcasestr(clean_name, "ipod") != NULL ||
+            strcasestr(clean_name, "iphone") != NULL ||
+            strcasestr(clean_name, "s5l") != NULL ||
+            strcasestr(clean_name, "n72") != NULL ||
+            strcasestr(clean_name, "n90") != NULL ||
+            strcasestr(clean_name, "n41") != NULL ||
+            strcasestr(clean_name, "apple") != NULL) {
+            strncpy(out_machine, clean_name, out_len - 1);
+            out_machine[out_len - 1] = '\0';
+        } else if (fallback_machine[0] == '\0' && strcmp(clean_name, "none") != 0) {
+            strncpy(fallback_machine, clean_name, sizeof(fallback_machine) - 1);
+            fallback_machine[sizeof(fallback_machine) - 1] = '\0';
+        }
+    }
+    g_slist_free(machines);
+
+    if (out_machine[0] != '\0') {
+        LOGI("Auto-selected Apple/iOS machine: '%s'", out_machine);
+        return;
+    }
+
+    if (fallback_machine[0] != '\0') {
+        strncpy(out_machine, fallback_machine, out_len - 1);
+        out_machine[out_len - 1] = '\0';
+        LOGI("No explicit Apple machine name matched; booting fallback machine: '%s'", out_machine);
+        return;
+    }
+
+    strncpy(out_machine, "virt", out_len - 1);
+    out_machine[out_len - 1] = '\0';
 }
 
 static bool file_exists(const char *path) {
@@ -274,13 +356,14 @@ static void *vm_worker_loop(void *arg) {
     char ram_arg[32];
     char smp_arg[32];
     char drive_arg[700];
+    char machine[64];
 
     snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
     snprintf(kernel_raw_path, sizeof(kernel_raw_path), "%s/kernelcache.raw", g_container_path);
     snprintf(bootrom_path, sizeof(bootrom_path), "%s/bootrom.bin", g_container_path);
     snprintf(rootfs_path, sizeof(rootfs_path), "%s/rootfs.dmg", g_container_path);
 
-    const char *machine = resolve_machine_type(g_board_config);
+    detect_ios_machine(g_board_config, machine, sizeof(machine));
 
     int safe_ram = 128;
     int safe_smp = 1;
@@ -300,7 +383,7 @@ static void *vm_worker_loop(void *arg) {
 
     argv[argc++] = "qemu-system-arm";
     argv[argc++] = "-M";
-    argv[argc++] = (char *)machine;
+    argv[argc++] = machine;
     argv[argc++] = "-m";
     argv[argc++] = ram_arg;
     argv[argc++] = "-smp";
@@ -378,7 +461,7 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeStartVm(
     strncpy(g_container_path, c_path ? c_path : "", sizeof(g_container_path) - 1);
     g_container_path[sizeof(g_container_path) - 1] = '\0';
 
-    strncpy(g_board_config, (c_board && c_board[0] != '\0') ? c_board : "ipod-touch-2g", sizeof(g_board_config) - 1);
+    strncpy(g_board_config, (c_board && c_board[0] != '\0') ? c_board : "n72ap", sizeof(g_board_config) - 1);
     g_board_config[sizeof(g_board_config) - 1] = '\0';
 
     if (c_path) (*env)->ReleaseStringUTFChars(env, container_path, c_path);
