@@ -224,16 +224,35 @@ jobs:
             "$GITHUB_WORKSPACE/engine/qemu_ios_jni.c" \
             -o qemu_ios_jni.o
 
-          # Pobieramy dokladne polecenie linkera z ninja (bez duplikowania archiwow)
-          # i podmieniamy main.c.o na qemu_ios_jni.o oraz wyjscie na -shared libqemu-ios.so
-          mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
-          LINK_CMD=$(ninja -t commands qemu-system-arm | tail -n 1)
-          SO_CMD=$(echo "$LINK_CMD" | sed \
-            -e 's|qemu-system-arm\.p/system_main\.c\.o|qemu_ios_jni.o|g' \
-            -e "s|-o qemu-system-arm|-shared -o $GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so -landroid -llog|g")
+          # Wyciagamy z build.ninja dokladna zawartosc LINK_ARGS dla qemu-system-arm za pomoca Pythona
+          python3 - <<'PY'
+          with open("build.ninja", "r", encoding="utf-8") as f:
+              text = f.read()
 
-          echo "Executing exact shared link command..."
-          eval "$SO_CMD"
+          marker = "build qemu-system-arm:"
+          idx = text.find(marker)
+          assert idx != -1, "Nie znaleziono celu qemu-system-arm w build.ninja"
+          section = text[idx:idx + 15000]
+
+          link_args = ""
+          for line in section.splitlines():
+              s = line.strip()
+              if s.startswith("LINK_ARGS ="):
+                  link_args = s[len("LINK_ARGS ="):].strip()
+                  break
+
+          assert link_args, "Nie znaleziono LINK_ARGS dla qemu-system-arm"
+          link_args = link_args.replace("qemu-system-arm.p/system_main.c.o", "qemu_ios_jni.o")
+          with open("libqemu-ios.rsp", "w", encoding="utf-8") as out:
+              out.write(link_args + "\n")
+          print("Wygenerowano libqemu-ios.rsp o dlugosci:", len(link_args))
+          PY
+
+          mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
+          "$PREFIX/bin/clang-pic-wrapper" -shared \
+            @libqemu-ios.rsp \
+            -landroid -llog \
+            -o "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
 
           "$STRIP" --strip-all "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
           ls -lh "$GITHUB_WORKSPACE/out/arm64-v8a/libqemu-ios.so"
