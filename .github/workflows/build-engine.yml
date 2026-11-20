@@ -151,6 +151,9 @@ jobs:
           #!/usr/bin/env bash
           args=()
           for arg in "\$@"; do
+            if [[ "\$arg" == "@qemu-system-arm.rsp" && -f "qemu-system-arm.rsp" ]]; then
+              cp "qemu-system-arm.rsp" "$GITHUB_WORKSPACE/saved-qemu-system-arm.rsp"
+            fi
             if [[ "\$arg" != "-fPIE" && "\$arg" != "-fpie" && "\$arg" != "-fno-pic" && "\$arg" != "-fno-PIC" ]]; then
               args+=("\$arg")
             fi
@@ -224,29 +227,9 @@ jobs:
             "$GITHUB_WORKSPACE/engine/qemu_ios_jni.c" \
             -o qemu_ios_jni.o
 
-          # Wyciagamy z build.ninja dokladna zawartosc LINK_ARGS dla qemu-system-arm za pomoca Pythona
-          python3 - <<'PY'
-          with open("build.ninja", "r", encoding="utf-8") as f:
-              text = f.read()
-
-          marker = "build qemu-system-arm:"
-          idx = text.find(marker)
-          assert idx != -1, "Nie znaleziono celu qemu-system-arm w build.ninja"
-          section = text[idx:idx + 15000]
-
-          link_args = ""
-          for line in section.splitlines():
-              s = line.strip()
-              if s.startswith("LINK_ARGS ="):
-                  link_args = s[len("LINK_ARGS ="):].strip()
-                  break
-
-          assert link_args, "Nie znaleziono LINK_ARGS dla qemu-system-arm"
-          link_args = link_args.replace("qemu-system-arm.p/system_main.c.o", "qemu_ios_jni.o")
-          with open("libqemu-ios.rsp", "w", encoding="utf-8") as out:
-              out.write(link_args + "\n")
-          print("Wygenerowano libqemu-ios.rsp o dlugosci:", len(link_args))
-          PY
+          # Podmieniamy system_main.c.o na qemu_ios_jni.o w przechwyconym pliku .rsp
+          sed 's|qemu-system-arm\.p/system_main\.c\.o|qemu_ios_jni.o|g' \
+            "$GITHUB_WORKSPACE/saved-qemu-system-arm.rsp" > libqemu-ios.rsp
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
           "$PREFIX/bin/clang-pic-wrapper" -shared \
