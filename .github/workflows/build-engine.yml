@@ -219,6 +219,7 @@ jobs:
             -Wl,--gc-sections \
             -Wl,--allow-multiple-definition \
             -Wl,--no-undefined \
+            -I"$GITHUB_WORKSPACE/qemu-ios-build" \
             -I"$GITHUB_WORKSPACE/qemu-ios-src/include" \
             -I"$PREFIX/include" \
             -I"$PREFIX/include/glib-2.0" \
