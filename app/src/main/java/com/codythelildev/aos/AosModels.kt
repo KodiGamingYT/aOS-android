@@ -48,8 +48,8 @@ enum class RendererBackend(val label: String, val nativeId: Int) {
 }
 
 data class VmSettings(
-    val cpuCores: Int = 4,
-    val ramMb: Int = 1024,
+    val cpuCores: Int = 3,
+    val ramMb: Int = 2048,
     val resolutionScale: Float = 0.75f,
     val renderer: RendererBackend = RendererBackend.GLES_NATIVE,
     val networkBridgeEnabled: Boolean = true,
