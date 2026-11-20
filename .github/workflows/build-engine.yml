@@ -208,15 +208,14 @@ jobs:
             --disable-guest-agent \
             --disable-werror \
             --extra-cflags="-fPIC -ftls-model=global-dynamic -Os -ffunction-sections -fdata-sections -I$PREFIX/include -DQEMU_IOS_EMBEDDED=1" \
-            --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
+            --extra-ldflags="-L$PREFIX/lib -lssl -lcrypto -Wl,-z,max-page-size=16384"
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
           ninja qemu-system-arm
 
-          # Wyciagamy z build.ninja dokladna liste obiektow i archiwow uzytych do zlinkowania qemu-system-arm
-          # (eliminuje zduplikowane konstruktory QOM takie jak chardev-gdb)
-          LINK_INPUTS=$(ninja -t commands qemu-system-arm | tail -n 1 | tr ' ' '\n' | grep -E '\.(o|fa|a)$' | grep -v 'main\.c\.o$' | tr '\n' ' ')
-          echo "Exact qemu-system-arm link inputs: $LINK_INPUTS"
+          # Wyciagamy dokladne flagi i wejscia linkera z pliku qemu-system-arm.rsp
+          RSP_ARGS=$(cat qemu-system-arm.rsp | tr ' ' '\n' | grep -v 'main\.c\.o$' | tr '\n' ' ')
+          echo "Linking libqemu-ios.so with exact qemu-system-arm inputs..."
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
           "$PREFIX/bin/clang-pic-wrapper" -shared -Os -ffunction-sections -fdata-sections \
@@ -230,7 +229,7 @@ jobs:
             -I"$PREFIX/include/glib-2.0" \
             -I"$PREFIX/lib/glib-2.0/include" \
             "$GITHUB_WORKSPACE/engine/qemu_ios_jni.c" \
-            $LINK_INPUTS \
+            $RSP_ARGS \
             -L"$PREFIX/lib" \
             -lssl -lcrypto \
             -lpixman-1 -lgio-2.0 -lgobject-2.0 -lgmodule-2.0 -lgthread-2.0 -lglib-2.0 -lintl \
