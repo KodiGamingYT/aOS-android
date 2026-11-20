@@ -211,17 +211,17 @@ jobs:
             --extra-ldflags="-L$PREFIX/lib -Wl,-z,max-page-size=16384"
 
           sed -i 's/-fPIE/-fPIC/g; s/-fpie/-fPIC/g' build.ninja
-          FA_ARCHIVES=$(grep -oE '^build [^:]+\.fa:' build.ninja | awk '{print $2}' | tr -d ':' | grep -Ev 'user|tests' | sort -u | tr '\n' ' ')
-          A_ARCHIVES=$(grep -oE '^build [^:]+\.a:' build.ninja | awk '{print $2}' | tr -d ':' | grep -v 'test' | sort -u | tr '\n' ' ')
-          echo "Whole-archive (.fa): $FA_ARCHIVES"
-          echo "Standard-archive (.a): $A_ARCHIVES"
-          ninja $FA_ARCHIVES $A_ARCHIVES
+          ninja qemu-system-arm
+
+          # Wyciagamy z build.ninja dokladna liste obiektow i archiwow uzytych do zlinkowania qemu-system-arm
+          # (eliminuje zduplikowane konstruktory QOM takie jak chardev-gdb)
+          LINK_INPUTS=$(ninja -t commands qemu-system-arm | tail -n 1 | tr ' ' '\n' | grep -E '\.(o|fa|a)$' | grep -v 'main\.c\.o$' | tr '\n' ' ')
+          echo "Exact qemu-system-arm link inputs: $LINK_INPUTS"
 
           mkdir -p "$GITHUB_WORKSPACE/out/arm64-v8a"
           "$PREFIX/bin/clang-pic-wrapper" -shared -Os -ffunction-sections -fdata-sections \
             -Wl,-z,max-page-size=16384 \
             -Wl,--gc-sections \
-            -Wl,--allow-multiple-definition \
             -Wl,--no-undefined \
             -I"$GITHUB_WORKSPACE/qemu-ios-build" \
             -I"$GITHUB_WORKSPACE/qemu-ios-src/include" \
@@ -230,8 +230,7 @@ jobs:
             -I"$PREFIX/include/glib-2.0" \
             -I"$PREFIX/lib/glib-2.0/include" \
             "$GITHUB_WORKSPACE/engine/qemu_ios_jni.c" \
-            -Wl,--whole-archive $FA_ARCHIVES -Wl,--no-whole-archive \
-            -Wl,--start-group $A_ARCHIVES -Wl,--end-group \
+            $LINK_INPUTS \
             -L"$PREFIX/lib" \
             -lssl -lcrypto \
             -lpixman-1 -lgio-2.0 -lgobject-2.0 -lgmodule-2.0 -lgthread-2.0 -lglib-2.0 -lintl \
