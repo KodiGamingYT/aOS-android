@@ -184,7 +184,7 @@ jobs:
           git clone --depth 1 https://github.com/samhenrigold/qemu-ios.git qemu-ios-src || \
           git clone --depth 1 https://github.com/devos50/qemu-ios.git qemu-ios-src
 
-          # Android Bionic shim dla shm_open / shm_unlink wymaganego w QEMU 11.0.5 (z wlasnym header guardem)
+          # 1. Android Bionic shim dla shm_open / shm_unlink wymaganego w QEMU 11.0.5
           cat >> qemu-ios-src/include/qemu/osdep.h <<'EOF'
           #ifndef AOS_ANDROID_SHM_SHIM_H
           #define AOS_ANDROID_SHM_SHIM_H
@@ -209,6 +209,25 @@ jobs:
           #endif
           #endif
           EOF
+
+          # 2. Zabezpieczamy tcg_max_ctxs przed przepelnieniem przy koprocesorach Apple IOP (S5L8930)
+          python3 - <<'PY'
+          with open("qemu-ios-src/tcg/tcg.c", "r", encoding="utf-8") as f:
+              src = f.read()
+
+          target = "tcg_max_ctxs = max_cpus;"
+          if target in src:
+              src = src.replace(target, "tcg_max_ctxs = max_cpus + 8;", 1)
+              print("Patched tcg_max_ctxs in tcg/tcg.c (+8 slots for Apple IOP)")
+          else:
+              print("Warning: tcg_max_ctxs = max_cpus not found literally, checking regex...")
+              import re
+              src, count = re.subn(r"tcg_max_ctxs\s*=\s*([^;]+);", r"tcg_max_ctxs = (\1) + 8;", src, count=1)
+              print("Regex patch count:", count)
+
+          with open("qemu-ios-src/tcg/tcg.c", "w", encoding="utf-8") as f:
+              f.write(src)
+          PY
 
           export PATH="$PREFIX/bin:$PATH"
           export PKG_CONFIG="$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
