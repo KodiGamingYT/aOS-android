@@ -38,7 +38,7 @@ static int g_saved_kotlin_stderr_fd = -1;
 static char g_container_path[512];
 static char g_board_config[64];
 static int g_cpu_cores = 1;
-static int g_ram_mb = 128;
+static int g_ram_mb = 512;
 static float g_res_scale = 0.75f;
 static int g_renderer_id = 0;
 static bool g_net_enabled = true;
@@ -256,94 +256,62 @@ static DisplayChangeListener g_aos_dcl = {
     .ops = &aos_dpy_ops,
 };
 
-static void strip_machine_suffix(const char *raw_name, char *out, size_t out_len) {
-    strncpy(out, raw_name, out_len - 1);
-    out[out_len - 1] = '\0';
-    size_t len = strlen(out);
-    const char *suffix = "-machine";
-    size_t slen = strlen(suffix);
-    if (len > slen && strcmp(out + len - slen, suffix) == 0) {
-        out[len - slen] = '\0';
-    }
-}
-
-static void detect_ios_machine(const char *preferred_board, char *out_machine, size_t out_len) {
-    out_machine[0] = '\0';
-
-    /* Inicjalizujemy typy QOM wczesniej, zeby moc przejrzec wszystkie zarejestrowane maszyny */
-    module_call_init(MODULE_INIT_QOM);
-
-    const char *candidates[] = {
-        preferred_board,
-        "n72ap",
-        "s5l8720",
-        "ipod",
-        "ipod-touch",
-        "iphone",
-        "n90ap",
-        "n41ap",
-        "n42ap",
-        NULL
-    };
-
-    for (int i = 0; candidates[i] != NULL; i++) {
-        if (candidates[i][0] == '\0') continue;
-        char type_name[128];
-        snprintf(type_name, sizeof(type_name), "%s-machine", candidates[i]);
-        if (object_class_by_name(type_name) != NULL || object_class_by_name(candidates[i]) != NULL) {
-            strncpy(out_machine, candidates[i], out_len - 1);
-            out_machine[out_len - 1] = '\0';
-            LOGI("Direct match for QEMU machine class: '%s'", out_machine);
-            return;
-        }
-    }
-
-    GSList *machines = object_class_get_list(TYPE_MACHINE, false);
-    char fallback_machine[64] = {0};
-
-    for (GSList *el = machines; el != NULL; el = el->next) {
-        ObjectClass *oc = OBJECT_CLASS(el->data);
-        if (object_class_is_abstract(oc)) continue;
-
-        const char *cls_name = object_class_get_name(oc);
-        char clean_name[64];
-        strip_machine_suffix(cls_name, clean_name, sizeof(clean_name));
-        LOGI("Available QOM machine: '%s' (cli: '%s')", cls_name, clean_name);
-
-        if (strcasestr(clean_name, "ipod") != NULL ||
-            strcasestr(clean_name, "iphone") != NULL ||
-            strcasestr(clean_name, "s5l") != NULL ||
-            strcasestr(clean_name, "n72") != NULL ||
-            strcasestr(clean_name, "n90") != NULL ||
-            strcasestr(clean_name, "n41") != NULL ||
-            strcasestr(clean_name, "apple") != NULL) {
-            strncpy(out_machine, clean_name, out_len - 1);
-            out_machine[out_len - 1] = '\0';
-        } else if (fallback_machine[0] == '\0' && strcmp(clean_name, "none") != 0) {
-            strncpy(fallback_machine, clean_name, sizeof(fallback_machine) - 1);
-            fallback_machine[sizeof(fallback_machine) - 1] = '\0';
-        }
-    }
-    g_slist_free(machines);
-
-    if (out_machine[0] != '\0') {
-        LOGI("Auto-selected Apple/iOS machine: '%s'", out_machine);
-        return;
-    }
-
-    if (fallback_machine[0] != '\0') {
-        strncpy(out_machine, fallback_machine, out_len - 1);
-        out_machine[out_len - 1] = '\0';
-        LOGI("No explicit Apple machine name matched; booting fallback machine: '%s'", out_machine);
-        return;
-    }
-
-    strncpy(out_machine, "virt", out_len - 1);
-    out_machine[out_len - 1] = '\0';
-}
-
 static bool file_exists(const char *path) {
     return path != NULL && access(path, R_OK) == 0;
+}
+
+static void resolve_blake_ios_machine(const char *board, char *out_machine, size_t out_len) {
+    module_call_init(MODULE_INIT_QOM);
+
+    /* Mapowanie boardConfig z aOS na nazwy maszyn w blake-rurak/qemu-ios */
+    const char *target = "iPhone-4";
+    if (board != NULL) {
+        if (strcasecmp(board, "n90ap") == 0) target = "iPhone-4";
+        else if (strcasecmp(board, "n81ap") == 0) target = "iPod-Touch-4G";
+        else if (strcasecmp(board, "k48ap") == 0) target = "ipad1";
+        else if (strcasecmp(board, "n88ap") == 0) target = "n88";
+        else if (strcasecmp(board, "n18ap") == 0) target = "n18";
+        else if (strcasecmp(board, "n72ap") == 0) target = "iPod-Touch";
+        else if (strcasecmp(board, "m68ap") == 0) target = "iPhone-2G";
+        else if (strcasecmp(board, "n45ap") == 0) target = "iPod-Touch-1G";
+        else if (strcasecmp(board, "n41ap") == 0) target = "iPhone-4"; /* Najblizszy SoC ARMv7 dla iOS 7/8 */
+    }
+
+    strncpy(out_machine, target, out_len - 1);
+    out_machine[out_len - 1] = '\0';
+
+    /* Wypisujemy dostepne wlasciwosci wybranej maszyny do logow diagnostycznych */
+    char type_name[128];
+    snprintf(type_name, sizeof(type_name), "%s-machine", out_machine);
+    ObjectClass *oc = object_class_by_name(type_name);
+    if (oc) {
+        LOGI("Verified QOM machine class '%s' for board '%s'", type_name, board ? board : "null");
+        ObjectPropertyIterator iter;
+        ObjectProperty *prop;
+        object_class_property_iter_init(&iter, oc);
+        while ((prop = object_property_iter_next(&iter)) != NULL) {
+            LOGI("Machine property [%s]: name='%s', type='%s'",
+                 out_machine,
+                 prop->name ? prop->name : "",
+                 prop->type ? prop->type : "");
+        }
+    } else {
+        LOGE("Machine class '%s' not found in QOM!", type_name);
+    }
+}
+
+static void append_machine_prop_if_supported(ObjectClass *oc,
+                                             char *machine_arg,
+                                             size_t max_len,
+                                             const char *prop_name,
+                                             const char *file_path) {
+    if (!oc || !file_exists(file_path)) return;
+    if (object_class_property_find(oc, prop_name) != NULL) {
+        strncat(machine_arg, ",", max_len - strlen(machine_arg) - 1);
+        strncat(machine_arg, prop_name, max_len - strlen(machine_arg) - 1);
+        strncat(machine_arg, "=", max_len - strlen(machine_arg) - 1);
+        strncat(machine_arg, file_path, max_len - strlen(machine_arg) - 1);
+    }
 }
 
 static void *vm_worker_loop(void *arg) {
@@ -351,63 +319,84 @@ static void *vm_worker_loop(void *arg) {
     hook_stderr_preserve_file();
     install_crash_handlers();
 
+    char machine[64];
+    resolve_blake_ios_machine(g_board_config, machine, sizeof(machine));
+
     char kernel_path[600];
     char kernel_raw_path[600];
+    char dtb_path[600];
+    char ramdisk_path[600];
     char bootrom_path[600];
+    char ibss_path[600];
+    char ibec_path[600];
+    char nor_path[600];
+    char nand_path[600];
     char rootfs_path[600];
-    char ram_arg[32];
-    char smp_arg[32];
+    char machine_arg[2048];
     char drive_arg[700];
-    char machine[64];
 
     snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
     snprintf(kernel_raw_path, sizeof(kernel_raw_path), "%s/kernelcache.raw", g_container_path);
+    snprintf(dtb_path, sizeof(dtb_path), "%s/devicetree.img3", g_container_path);
+    snprintf(ramdisk_path, sizeof(ramdisk_path), "%s/ramdisk.dmg", g_container_path);
     snprintf(bootrom_path, sizeof(bootrom_path), "%s/bootrom.bin", g_container_path);
+    snprintf(ibss_path, sizeof(ibss_path), "%s/ibss.img3", g_container_path);
+    snprintf(ibec_path, sizeof(ibec_path), "%s/ibec.img3", g_container_path);
+    snprintf(nor_path, sizeof(nor_path), "%s/nor.bin", g_container_path);
+    snprintf(nand_path, sizeof(nand_path), "%s/nand.img", g_container_path);
     snprintf(rootfs_path, sizeof(rootfs_path), "%s/rootfs.dmg", g_container_path);
 
-    detect_ios_machine(g_board_config, machine, sizeof(machine));
-
-    int safe_ram = 128;
-    int safe_smp = 1;
-
-    snprintf(ram_arg, sizeof(ram_arg), "%dM", safe_ram);
-    snprintf(smp_arg, sizeof(smp_arg), "%d", safe_smp);
-    snprintf(drive_arg, sizeof(drive_arg), "file=%s,format=raw,if=none,id=nand0", rootfs_path);
-
     const char *selected_kernel = file_exists(kernel_raw_path) ? kernel_raw_path : kernel_path;
+    const char *selected_nand = file_exists(nand_path) ? nand_path : rootfs_path;
+
+    char type_name[128];
+    snprintf(type_name, sizeof(type_name), "%s-machine", machine);
+    ObjectClass *oc = object_class_by_name(type_name);
+
+    snprintf(machine_arg, sizeof(machine_arg), "%s", machine);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "bootrom", bootrom_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "ibss", ibss_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "ibec", ibec_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "kernel", selected_kernel);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "kernelcache", selected_kernel);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "devicetree", dtb_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "dtb", dtb_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "ramdisk", ramdisk_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nor", nor_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nand", selected_nand);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "rootfs", rootfs_path);
+
+    /* A4 (S5L8930) posiada 512 MB RAM i 1 rdzen CPU */
+    const char *ram_str = (strcmp(machine, "iPhone-4") == 0 ||
+                           strcmp(machine, "iPod-Touch-4G") == 0 ||
+                           strcmp(machine, "ipad1") == 0) ? "512M" : "256M";
+
+    snprintf(drive_arg, sizeof(drive_arg), "file=%s,format=raw,if=none,id=nand0", selected_nand);
 
     LOGI("Checking container files in: %s", g_container_path);
-    LOGI("kernel=%s (exists=%d), bootrom=%d, rootfs.dmg=%d",
-         selected_kernel, file_exists(selected_kernel), file_exists(bootrom_path), file_exists(rootfs_path));
+    LOGI("kernel=%s (exists=%d), dtb=%d, rootfs=%d",
+         selected_kernel, file_exists(selected_kernel),
+         file_exists(dtb_path), file_exists(rootfs_path));
 
     char *argv[24];
     int argc = 0;
 
     argv[argc++] = "qemu-system-arm";
     argv[argc++] = "-M";
-    argv[argc++] = machine;
+    argv[argc++] = machine_arg;
     argv[argc++] = "-m";
-    argv[argc++] = ram_arg;
+    argv[argc++] = (char *)ram_str;
     argv[argc++] = "-smp";
-    argv[argc++] = smp_arg;
-
-    if (file_exists(bootrom_path)) {
-        argv[argc++] = "-bios";
-        argv[argc++] = bootrom_path;
-    }
+    argv[argc++] = "1";
 
     if (file_exists(selected_kernel)) {
         argv[argc++] = "-kernel";
         argv[argc++] = (char *)selected_kernel;
-    } else {
-        LOGE("Missing kernelcache at %s", selected_kernel);
     }
 
-    if (file_exists(rootfs_path)) {
+    if (file_exists(selected_nand)) {
         argv[argc++] = "-drive";
         argv[argc++] = drive_arg;
-    } else {
-        LOGE("Missing rootfs.dmg at %s", rootfs_path);
     }
 
     argv[argc++] = "-serial";
@@ -416,8 +405,7 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Calling qemu_init: machine=%s board=%s ram=%s smp=%s argc=%d",
-         machine, g_board_config, ram_arg, smp_arg, argc);
+    LOGI("Calling qemu_init: -M %s -m %s (argc=%d)", machine_arg, ram_str, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
@@ -463,7 +451,7 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeStartVm(
     strncpy(g_container_path, c_path ? c_path : "", sizeof(g_container_path) - 1);
     g_container_path[sizeof(g_container_path) - 1] = '\0';
 
-    strncpy(g_board_config, (c_board && c_board[0] != '\0') ? c_board : "n72ap", sizeof(g_board_config) - 1);
+    strncpy(g_board_config, (c_board && c_board[0] != '\0') ? c_board : "n90ap", sizeof(g_board_config) - 1);
     g_board_config[sizeof(g_board_config) - 1] = '\0';
 
     if (c_path) (*env)->ReleaseStringUTFChars(env, container_path, c_path);
