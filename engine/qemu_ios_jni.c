@@ -305,7 +305,6 @@ static void *vm_worker_loop(void *arg) {
     char kernel_path[600];
     char kernel_raw_path[600];
     char dtb_path[600];
-    char ramdisk_path[600];
     char bootrom_path[600];
     char iboot_path[600];
     char nor_path[600];
@@ -316,7 +315,6 @@ static void *vm_worker_loop(void *arg) {
     snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
     snprintf(kernel_raw_path, sizeof(kernel_raw_path), "%s/kernelcache.raw", g_container_path);
     snprintf(dtb_path, sizeof(dtb_path), "%s/devicetree.img3", g_container_path);
-    snprintf(ramdisk_path, sizeof(ramdisk_path), "%s/ramdisk.dmg", g_container_path);
     snprintf(bootrom_path, sizeof(bootrom_path), "%s/bootrom.bin", g_container_path);
     snprintf(iboot_path, sizeof(iboot_path), "%s/iboot.img3", g_container_path);
     snprintf(nor_path, sizeof(nor_path), "%s/nor.bin", g_container_path);
@@ -332,7 +330,7 @@ static void *vm_worker_loop(void *arg) {
 
     /*
      * samhenrigold/qemu-ios wymaga DOKLADNIE JEDNEGO z: iboot=, bootrom=, lub kboot=
-     * Uzywamy kboot= dla bezposredniego bootowania jadra iOS z kontenera.
+     * Nie przekazujemy initrd=, poniewaz QEMU odrzuca je bez opcji -kernel.
      */
     snprintf(machine_arg, sizeof(machine_arg), "%s", machine);
     if (file_exists(bootrom_path)) {
@@ -346,11 +344,9 @@ static void *vm_worker_loop(void *arg) {
     }
 
     append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "dtb", dtb_path);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "initrd", ramdisk_path);
     append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nor", nor_path);
     append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nand", selected_nand);
 
-    /* Wlaczamy grafike, USB i opcjonalnie Wi-Fi bezposrednio na maszynie */
     if (oc && object_class_property_find(oc, "graphics") != NULL) {
         strncat(machine_arg, ",graphics=on", sizeof(machine_arg) - strlen(machine_arg) - 1);
     }
