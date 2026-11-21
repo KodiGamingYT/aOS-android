@@ -16,7 +16,6 @@
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
-#include "hw/boards.h"
 #include "qom/object.h"
 #include "ui/console.h"
 #include "ui/input.h"
@@ -263,7 +262,7 @@ static bool file_exists(const char *path) {
 static void resolve_blake_ios_machine(const char *board, char *out_machine, size_t out_len) {
     module_call_init(MODULE_INIT_QOM);
 
-    /* Mapowanie boardConfig z aOS na nazwy maszyn w blake-rurak/qemu-ios */
+    /* Mapowanie boardConfig z aOS na nazwy maszyn w samhenrigold/qemu-ios */
     const char *target = "iPhone-4";
     if (board != NULL) {
         if (strcasecmp(board, "n90ap") == 0) target = "iPhone-4";
@@ -274,7 +273,7 @@ static void resolve_blake_ios_machine(const char *board, char *out_machine, size
         else if (strcasecmp(board, "n72ap") == 0) target = "iPod-Touch";
         else if (strcasecmp(board, "m68ap") == 0) target = "iPhone-2G";
         else if (strcasecmp(board, "n45ap") == 0) target = "iPod-Touch-1G";
-        else if (strcasecmp(board, "n41ap") == 0) target = "iPhone-4"; /* Najblizszy SoC ARMv7 dla iOS 7/8 */
+        else if (strcasecmp(board, "n41ap") == 0) target = "iPhone-4";
     }
 
     strncpy(out_machine, target, out_len - 1);
