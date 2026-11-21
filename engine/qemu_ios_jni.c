@@ -274,32 +274,36 @@ static void ensure_nand_directory(const char *nand_dir) {
     snprintf(geom_path, sizeof(geom_path), "%s/geometry.json", nand_dir);
     FILE *f = fopen(geom_path, "wb");
     if (f) {
+        /* Dopasowane dokladnie do S5L8930 IOP: 2 buses x 4 CE, id 0xb614d5ad (3054818733) */
         fprintf(f,
                 "{\n"
-                "  \"buses\": 1,\n"
-                "  \"num_buses\": 1,\n"
-                "  \"bus_count\": 1,\n"
-                "  \"ce_per_bus\": 1,\n"
-                "  \"ce_count\": 1,\n"
-                "  \"blocks_per_ce\": 1024,\n"
-                "  \"blocks_per_bank\": 1024,\n"
-                "  \"blocks\": 1024,\n"
-                "  \"total_blocks\": 1024,\n"
+                "  \"buses\": 2,\n"
+                "  \"num_buses\": 2,\n"
+                "  \"bus_count\": 2,\n"
+                "  \"ce_per_bus\": 4,\n"
+                "  \"ce_count\": 8,\n"
+                "  \"blocks_per_ce\": 4096,\n"
+                "  \"blocks_per_bank\": 4096,\n"
+                "  \"blocks\": 4096,\n"
+                "  \"total_blocks\": 32768,\n"
                 "  \"pages_per_block\": 128,\n"
                 "  \"page_bytes\": 8192,\n"
-                "  \"oob_bytes\": 16,\n"
-                "  \"spare_bytes\": 16,\n"
-                "  \"meta_bytes\": 16,\n"
+                "  \"oob_bytes\": 12,\n"
+                "  \"spare_bytes\": 12,\n"
+                "  \"meta_bytes\": 12,\n"
                 "  \"sector_bytes\": 512,\n"
                 "  \"lba_bytes\": 512,\n"
                 "  \"sectors_per_page\": 16,\n"
+                "  \"id\": 3054818733,\n"
+                "  \"chip_id\": 3054818733,\n"
+                "  \"nand_id\": 3054818733,\n"
                 "  \"banks\": 1,\n"
                 "  \"banks_per_ce\": 1,\n"
                 "  \"dies_per_ce\": 1,\n"
                 "  \"planes_per_die\": 1\n"
                 "}\n");
         fclose(f);
-        LOGI("Wrote NAND geometry.json (with ce_per_bus=1, buses=1) at %s", geom_path);
+        LOGI("Wrote NAND geometry.json (2 buses x 4 CE, id=0xb614d5ad) at %s", geom_path);
     } else {
         LOGE("Failed to write %s: %s", geom_path, strerror(errno));
     }
@@ -411,7 +415,7 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Calling qemu_init (v6-ce-per-bus): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
+    LOGI("Calling qemu_init (v7-2x4-ce): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
