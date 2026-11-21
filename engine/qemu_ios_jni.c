@@ -351,10 +351,6 @@ static void *vm_worker_loop(void *arg) {
     char *argv[20];
     int argc = 0;
 
-    /*
-     * Wymuszamy -accel tcg,thread=multi oraz -smp 2, poniewaz Apple A4 (S5L8930)
-     * tworzy watek glownego CPU ARMv7 oraz watek koprocesora IOP (tcg_max_ctxs >= 2).
-     */
     argv[argc++] = "qemu-system-arm";
     argv[argc++] = "-M";
     argv[argc++] = machine_arg;
@@ -370,7 +366,7 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Calling qemu_init: -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
+    LOGI("Calling qemu_init (v2-tcg-multi): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
