@@ -26,6 +26,7 @@ extern int qemu_init(int argc, char **argv, char **envp);
 extern void qemu_main_loop(void);
 extern void qemu_cleanup(void);
 extern void qemu_system_shutdown_request(int reason);
+extern Object *qdev_get_machine(void);
 
 static ANativeWindow *g_window = NULL;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -259,10 +260,9 @@ static bool file_exists(const char *path) {
     return path != NULL && access(path, R_OK) == 0;
 }
 
-static void resolve_blake_ios_machine(const char *board, char *out_machine, size_t out_len) {
+static void resolve_ios_machine(const char *board, char *out_machine, size_t out_len) {
     module_call_init(MODULE_INIT_QOM);
 
-    /* Mapowanie boardConfig z aOS na nazwy maszyn w samhenrigold/qemu-ios */
     const char *target = "iPhone-4";
     if (board != NULL) {
         if (strcasecmp(board, "n90ap") == 0) target = "iPhone-4";
@@ -278,25 +278,6 @@ static void resolve_blake_ios_machine(const char *board, char *out_machine, size
 
     strncpy(out_machine, target, out_len - 1);
     out_machine[out_len - 1] = '\0';
-
-    /* Wypisujemy dostepne wlasciwosci wybranej maszyny do logow diagnostycznych */
-    char type_name[128];
-    snprintf(type_name, sizeof(type_name), "%s-machine", out_machine);
-    ObjectClass *oc = object_class_by_name(type_name);
-    if (oc) {
-        LOGI("Verified QOM machine class '%s' for board '%s'", type_name, board ? board : "null");
-        ObjectPropertyIterator iter;
-        ObjectProperty *prop;
-        object_class_property_iter_init(&iter, oc);
-        while ((prop = object_property_iter_next(&iter)) != NULL) {
-            LOGI("Machine property [%s]: name='%s', type='%s'",
-                 out_machine,
-                 prop->name ? prop->name : "",
-                 prop->type ? prop->type : "");
-        }
-    } else {
-        LOGE("Machine class '%s' not found in QOM!", type_name);
-    }
 }
 
 static void append_machine_prop_if_supported(ObjectClass *oc,
@@ -319,28 +300,25 @@ static void *vm_worker_loop(void *arg) {
     install_crash_handlers();
 
     char machine[64];
-    resolve_blake_ios_machine(g_board_config, machine, sizeof(machine));
+    resolve_ios_machine(g_board_config, machine, sizeof(machine));
 
     char kernel_path[600];
     char kernel_raw_path[600];
     char dtb_path[600];
     char ramdisk_path[600];
     char bootrom_path[600];
-    char ibss_path[600];
-    char ibec_path[600];
+    char iboot_path[600];
     char nor_path[600];
     char nand_path[600];
     char rootfs_path[600];
     char machine_arg[2048];
-    char drive_arg[700];
 
     snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
     snprintf(kernel_raw_path, sizeof(kernel_raw_path), "%s/kernelcache.raw", g_container_path);
     snprintf(dtb_path, sizeof(dtb_path), "%s/devicetree.img3", g_container_path);
     snprintf(ramdisk_path, sizeof(ramdisk_path), "%s/ramdisk.dmg", g_container_path);
     snprintf(bootrom_path, sizeof(bootrom_path), "%s/bootrom.bin", g_container_path);
-    snprintf(ibss_path, sizeof(ibss_path), "%s/ibss.img3", g_container_path);
-    snprintf(ibec_path, sizeof(ibec_path), "%s/ibec.img3", g_container_path);
+    snprintf(iboot_path, sizeof(iboot_path), "%s/iboot.img3", g_container_path);
     snprintf(nor_path, sizeof(nor_path), "%s/nor.bin", g_container_path);
     snprintf(nand_path, sizeof(nand_path), "%s/nand.img", g_container_path);
     snprintf(rootfs_path, sizeof(rootfs_path), "%s/rootfs.dmg", g_container_path);
@@ -352,32 +330,45 @@ static void *vm_worker_loop(void *arg) {
     snprintf(type_name, sizeof(type_name), "%s-machine", machine);
     ObjectClass *oc = object_class_by_name(type_name);
 
+    /*
+     * samhenrigold/qemu-ios wymaga DOKLADNIE JEDNEGO z: iboot=, bootrom=, lub kboot=
+     * Uzywamy kboot= dla bezposredniego bootowania jadra iOS z kontenera.
+     */
     snprintf(machine_arg, sizeof(machine_arg), "%s", machine);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "bootrom", bootrom_path);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "ibss", ibss_path);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "ibec", ibec_path);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "kernel", selected_kernel);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "kernelcache", selected_kernel);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "devicetree", dtb_path);
+    if (file_exists(bootrom_path)) {
+        append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "bootrom", bootrom_path);
+    } else if (file_exists(iboot_path)) {
+        append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "iboot", iboot_path);
+    } else if (file_exists(selected_kernel)) {
+        append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "kboot", selected_kernel);
+    } else {
+        LOGE("CRITICAL: Missing kernelcache / iboot / bootrom in %s", g_container_path);
+    }
+
     append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "dtb", dtb_path);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "ramdisk", ramdisk_path);
+    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "initrd", ramdisk_path);
     append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nor", nor_path);
     append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nand", selected_nand);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "rootfs", rootfs_path);
 
-    /* A4 (S5L8930) posiada 512 MB RAM i 1 rdzen CPU */
+    /* Wlaczamy grafike, USB i opcjonalnie Wi-Fi bezposrednio na maszynie */
+    if (oc && object_class_property_find(oc, "graphics") != NULL) {
+        strncat(machine_arg, ",graphics=on", sizeof(machine_arg) - strlen(machine_arg) - 1);
+    }
+    if (oc && object_class_property_find(oc, "wifi") != NULL) {
+        strncat(machine_arg, g_net_enabled ? ",wifi=on" : ",wifi=off",
+                sizeof(machine_arg) - strlen(machine_arg) - 1);
+    }
+
     const char *ram_str = (strcmp(machine, "iPhone-4") == 0 ||
                            strcmp(machine, "iPod-Touch-4G") == 0 ||
                            strcmp(machine, "ipad1") == 0) ? "512M" : "256M";
 
-    snprintf(drive_arg, sizeof(drive_arg), "file=%s,format=raw,if=none,id=nand0", selected_nand);
-
     LOGI("Checking container files in: %s", g_container_path);
-    LOGI("kernel=%s (exists=%d), dtb=%d, rootfs=%d",
+    LOGI("kboot=%s (exists=%d), dtb=%d, nand=%s (exists=%d)",
          selected_kernel, file_exists(selected_kernel),
-         file_exists(dtb_path), file_exists(rootfs_path));
+         file_exists(dtb_path), selected_nand, file_exists(selected_nand));
 
-    char *argv[24];
+    char *argv[16];
     int argc = 0;
 
     argv[argc++] = "qemu-system-arm";
@@ -387,17 +378,6 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = (char *)ram_str;
     argv[argc++] = "-smp";
     argv[argc++] = "1";
-
-    if (file_exists(selected_kernel)) {
-        argv[argc++] = "-kernel";
-        argv[argc++] = (char *)selected_kernel;
-    }
-
-    if (file_exists(selected_nand)) {
-        argv[argc++] = "-drive";
-        argv[argc++] = drive_arg;
-    }
-
     argv[argc++] = "-serial";
     argv[argc++] = "stdio";
     argv[argc++] = "-display";
@@ -531,7 +511,21 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeSendGpioKey(
         jboolean is_pressed) {
     (void)env;
     (void)thiz;
-    LOGI("QEMU GPIO key=%d pressed=%d", key_code, is_pressed == JNI_TRUE);
+
+    pthread_mutex_lock(&g_lock);
+    bool running = g_vm_running;
+    pthread_mutex_unlock(&g_lock);
+    if (!running) return;
+
+    Object *mach = qdev_get_machine();
+    if (!mach) return;
+
+    bool pressed = (is_pressed == JNI_TRUE);
+    if (key_code == 1) {
+        object_property_set_bool(mach, "button-home", pressed, NULL);
+    } else if (key_code == 2) {
+        object_property_set_bool(mach, "button-hold", pressed, NULL);
+    }
 }
 
 JNIEXPORT void JNICALL
@@ -543,7 +537,25 @@ Java_com_codythelildev_aos_QemuNativeBridge_nativeSendTouchEvent(
         jint action) {
     (void)env;
     (void)thiz;
-    (void)normalized_x;
-    (void)normalized_y;
-    (void)action;
+
+    pthread_mutex_lock(&g_lock);
+    bool running = g_vm_running;
+    pthread_mutex_unlock(&g_lock);
+    if (!running) return;
+
+    int x_abs = (int)(normalized_x * 32767.0f);
+    int y_abs = (int)(normalized_y * 32767.0f);
+    if (x_abs < 0) x_abs = 0;
+    if (x_abs > 32767) x_abs = 32767;
+    if (y_abs < 0) y_abs = 0;
+    if (y_abs > 32767) y_abs = 32767;
+
+    qemu_input_queue_abs(NULL, INPUT_AXIS_X, x_abs, 0, 32767);
+    qemu_input_queue_abs(NULL, INPUT_AXIS_Y, y_abs, 0, 32767);
+    if (action == 0) {
+        qemu_input_queue_btn(NULL, INPUT_BUTTON_LEFT, true);
+    } else if (action == 1) {
+        qemu_input_queue_btn(NULL, INPUT_BUTTON_LEFT, false);
+    }
+    qemu_input_event_sync();
 }
