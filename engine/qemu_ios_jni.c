@@ -15,7 +15,6 @@
 #include <unistd.h>
 
 #include "qemu/osdep.h"
-#include "qemu/module.h"
 #include "qom/object.h"
 #include "ui/console.h"
 #include "ui/input.h"
@@ -37,7 +36,7 @@ static int g_saved_kotlin_stderr_fd = -1;
 
 static char g_container_path[512];
 static char g_board_config[64];
-static int g_cpu_cores = 1;
+static int g_cpu_cores = 2;
 static int g_ram_mb = 512;
 static float g_res_scale = 0.75f;
 static int g_renderer_id = 0;
@@ -261,8 +260,6 @@ static bool file_exists(const char *path) {
 }
 
 static void resolve_ios_machine(const char *board, char *out_machine, size_t out_len) {
-    module_call_init(MODULE_INIT_QOM);
-
     const char *target = "iPhone-4";
     if (board != NULL) {
         if (strcasecmp(board, "n90ap") == 0) target = "iPhone-4";
@@ -280,18 +277,12 @@ static void resolve_ios_machine(const char *board, char *out_machine, size_t out
     out_machine[out_len - 1] = '\0';
 }
 
-static void append_machine_prop_if_supported(ObjectClass *oc,
-                                             char *machine_arg,
-                                             size_t max_len,
-                                             const char *prop_name,
-                                             const char *file_path) {
-    if (!oc || !file_exists(file_path)) return;
-    if (object_class_property_find(oc, prop_name) != NULL) {
-        strncat(machine_arg, ",", max_len - strlen(machine_arg) - 1);
-        strncat(machine_arg, prop_name, max_len - strlen(machine_arg) - 1);
-        strncat(machine_arg, "=", max_len - strlen(machine_arg) - 1);
-        strncat(machine_arg, file_path, max_len - strlen(machine_arg) - 1);
-    }
+static void append_prop_str(char *machine_arg, size_t max_len, const char *prop_name, const char *value) {
+    if (!value || value[0] == '\0') return;
+    strncat(machine_arg, ",", max_len - strlen(machine_arg) - 1);
+    strncat(machine_arg, prop_name, max_len - strlen(machine_arg) - 1);
+    strncat(machine_arg, "=", max_len - strlen(machine_arg) - 1);
+    strncat(machine_arg, value, max_len - strlen(machine_arg) - 1);
 }
 
 static void *vm_worker_loop(void *arg) {
@@ -324,36 +315,29 @@ static void *vm_worker_loop(void *arg) {
     const char *selected_kernel = file_exists(kernel_raw_path) ? kernel_raw_path : kernel_path;
     const char *selected_nand = file_exists(nand_path) ? nand_path : rootfs_path;
 
-    char type_name[128];
-    snprintf(type_name, sizeof(type_name), "%s-machine", machine);
-    ObjectClass *oc = object_class_by_name(type_name);
-
-    /*
-     * samhenrigold/qemu-ios wymaga DOKLADNIE JEDNEGO z: iboot=, bootrom=, lub kboot=
-     * Nie przekazujemy initrd=, poniewaz QEMU odrzuca je bez opcji -kernel.
-     */
     snprintf(machine_arg, sizeof(machine_arg), "%s", machine);
     if (file_exists(bootrom_path)) {
-        append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "bootrom", bootrom_path);
+        append_prop_str(machine_arg, sizeof(machine_arg), "bootrom", bootrom_path);
     } else if (file_exists(iboot_path)) {
-        append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "iboot", iboot_path);
+        append_prop_str(machine_arg, sizeof(machine_arg), "iboot", iboot_path);
     } else if (file_exists(selected_kernel)) {
-        append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "kboot", selected_kernel);
+        append_prop_str(machine_arg, sizeof(machine_arg), "kboot", selected_kernel);
     } else {
         LOGE("CRITICAL: Missing kernelcache / iboot / bootrom in %s", g_container_path);
     }
 
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "dtb", dtb_path);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nor", nor_path);
-    append_machine_prop_if_supported(oc, machine_arg, sizeof(machine_arg), "nand", selected_nand);
+    if (file_exists(dtb_path)) {
+        append_prop_str(machine_arg, sizeof(machine_arg), "dtb", dtb_path);
+    }
+    if (file_exists(nor_path)) {
+        append_prop_str(machine_arg, sizeof(machine_arg), "nor", nor_path);
+    }
+    if (file_exists(selected_nand)) {
+        append_prop_str(machine_arg, sizeof(machine_arg), "nand", selected_nand);
+    }
 
-    if (oc && object_class_property_find(oc, "graphics") != NULL) {
-        strncat(machine_arg, ",graphics=on", sizeof(machine_arg) - strlen(machine_arg) - 1);
-    }
-    if (oc && object_class_property_find(oc, "wifi") != NULL) {
-        strncat(machine_arg, g_net_enabled ? ",wifi=on" : ",wifi=off",
-                sizeof(machine_arg) - strlen(machine_arg) - 1);
-    }
+    append_prop_str(machine_arg, sizeof(machine_arg), "graphics", "on");
+    append_prop_str(machine_arg, sizeof(machine_arg), "wifi", g_net_enabled ? "on" : "off");
 
     const char *ram_str = (strcmp(machine, "iPhone-4") == 0 ||
                            strcmp(machine, "iPod-Touch-4G") == 0 ||
@@ -364,23 +348,29 @@ static void *vm_worker_loop(void *arg) {
          selected_kernel, file_exists(selected_kernel),
          file_exists(dtb_path), selected_nand, file_exists(selected_nand));
 
-    char *argv[16];
+    char *argv[20];
     int argc = 0;
 
+    /*
+     * Wymuszamy -accel tcg,thread=multi oraz -smp 2, poniewaz Apple A4 (S5L8930)
+     * tworzy watek glownego CPU ARMv7 oraz watek koprocesora IOP (tcg_max_ctxs >= 2).
+     */
     argv[argc++] = "qemu-system-arm";
     argv[argc++] = "-M";
     argv[argc++] = machine_arg;
+    argv[argc++] = "-accel";
+    argv[argc++] = "tcg,thread=multi";
     argv[argc++] = "-m";
     argv[argc++] = (char *)ram_str;
     argv[argc++] = "-smp";
-    argv[argc++] = "1";
+    argv[argc++] = "2";
     argv[argc++] = "-serial";
     argv[argc++] = "stdio";
     argv[argc++] = "-display";
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Calling qemu_init: -M %s -m %s (argc=%d)", machine_arg, ram_str, argc);
+    LOGI("Calling qemu_init: -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
