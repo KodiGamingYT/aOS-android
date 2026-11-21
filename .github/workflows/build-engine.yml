@@ -174,11 +174,10 @@ jobs:
           EOF
           chmod +x "$PREFIX/bin/clangxx-pic-wrapper"
 
-      - name: Clone & build qemu-ios core + JNI wrapper into libqemu-ios.so
+      - name: Clone & build blake-rurak/qemu-ios + JNI wrapper into libqemu-ios.so
         run: |
           cd "$GITHUB_WORKSPACE"
-          git clone --depth 1 https://github.com/devos50/qemu-ios.git qemu-ios-src || \
-          git clone --depth 1 https://github.com/VisualApple/qemu-ios.git qemu-ios-src
+          git clone --depth 1 https://github.com/blake-rurak/qemu-ios.git qemu-ios-src
 
           export PATH="$PREFIX/bin:$PATH"
           export PKG_CONFIG="$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
