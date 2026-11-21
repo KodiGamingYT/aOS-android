@@ -184,8 +184,10 @@ jobs:
           git clone --depth 1 https://github.com/samhenrigold/qemu-ios.git qemu-ios-src || \
           git clone --depth 1 https://github.com/devos50/qemu-ios.git qemu-ios-src
 
-          # Android Bionic shim dla shm_open / shm_unlink wymaganego w QEMU 11.0.5
+          # Android Bionic shim dla shm_open / shm_unlink wymaganego w QEMU 11.0.5 (z wlasnym header guardem)
           cat >> qemu-ios-src/include/qemu/osdep.h <<'EOF'
+          #ifndef AOS_ANDROID_SHM_SHIM_H
+          #define AOS_ANDROID_SHM_SHIM_H
           #ifdef __ANDROID__
           #include <sys/syscall.h>
           #include <linux/memfd.h>
@@ -203,6 +205,7 @@ jobs:
           #endif
           #ifndef shm_unlink
           #define shm_unlink aos_android_shm_unlink
+          #endif
           #endif
           #endif
           EOF
