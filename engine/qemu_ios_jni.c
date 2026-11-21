@@ -279,16 +279,22 @@ static void ensure_nand_directory(const char *nand_dir) {
                 "  \"page_bytes\": 8192,\n"
                 "  \"oob_bytes\": 16,\n"
                 "  \"spare_bytes\": 16,\n"
+                "  \"meta_bytes\": 16,\n"
                 "  \"pages_per_block\": 128,\n"
+                "  \"blocks_per_ce\": 1024,\n"
                 "  \"blocks_per_bank\": 1024,\n"
                 "  \"blocks\": 1024,\n"
-                "  \"banks\": 1,\n"
+                "  \"total_blocks\": 1024,\n"
                 "  \"ce_count\": 1,\n"
+                "  \"banks\": 1,\n"
+                "  \"banks_per_ce\": 1,\n"
                 "  \"dies_per_ce\": 1,\n"
-                "  \"planes_per_die\": 1\n"
+                "  \"planes_per_die\": 1,\n"
+                "  \"sectors_per_page\": 16,\n"
+                "  \"lba_bytes\": 512\n"
                 "}\n");
         fclose(f);
-        LOGI("Wrote NAND geometry.json (page_bytes=8192) at %s", geom_path);
+        LOGI("Wrote NAND geometry.json (with blocks_per_ce=1024) at %s", geom_path);
     } else {
         LOGE("Failed to write %s: %s", geom_path, strerror(errno));
     }
@@ -400,7 +406,7 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Calling qemu_init (v4-page-bytes): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
+    LOGI("Calling qemu_init (v5-blocks-per-ce): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
