@@ -184,6 +184,29 @@ jobs:
           git clone --depth 1 https://github.com/samhenrigold/qemu-ios.git qemu-ios-src || \
           git clone --depth 1 https://github.com/devos50/qemu-ios.git qemu-ios-src
 
+          # Android Bionic shim dla shm_open / shm_unlink wymaganego w QEMU 11.0.5
+          cat >> qemu-ios-src/include/qemu/osdep.h <<'EOF'
+          #ifdef __ANDROID__
+          #include <sys/syscall.h>
+          #include <linux/memfd.h>
+          static inline int aos_android_shm_open(const char *name, int oflag, mode_t mode) {
+              (void)oflag;
+              (void)mode;
+              return (int)syscall(__NR_memfd_create, name ? name : "qemu-shm", MFD_CLOEXEC);
+          }
+          static inline int aos_android_shm_unlink(const char *name) {
+              (void)name;
+              return 0;
+          }
+          #ifndef shm_open
+          #define shm_open aos_android_shm_open
+          #endif
+          #ifndef shm_unlink
+          #define shm_unlink aos_android_shm_unlink
+          #endif
+          #endif
+          EOF
+
           export PATH="$PREFIX/bin:$PATH"
           export PKG_CONFIG="$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
           export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
