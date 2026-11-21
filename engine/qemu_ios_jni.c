@@ -272,23 +272,25 @@ static void ensure_nand_directory(const char *nand_dir) {
 
     char geom_path[700];
     snprintf(geom_path, sizeof(geom_path), "%s/geometry.json", nand_dir);
-    if (!file_exists(geom_path)) {
-        FILE *f = fopen(geom_path, "wb");
-        if (f) {
-            /* Standardowa geometria NAND dla ukladow Apple S5L8930 (8KB page, 128 pages/block) */
-            fprintf(f,
-                    "{\n"
-                    "  \"banks\": 1,\n"
-                    "  \"blocks_per_bank\": 1024,\n"
-                    "  \"pages_per_block\": 128,\n"
-                    "  \"bytes_per_page\": 8192,\n"
-                    "  \"spare_bytes_per_page\": 16\n"
-                    "}\n");
-            fclose(f);
-            LOGI("Generated default NAND geometry.json at %s", geom_path);
-        } else {
-            LOGE("Failed to write %s: %s", geom_path, strerror(errno));
-        }
+    FILE *f = fopen(geom_path, "wb");
+    if (f) {
+        fprintf(f,
+                "{\n"
+                "  \"page_bytes\": 8192,\n"
+                "  \"oob_bytes\": 16,\n"
+                "  \"spare_bytes\": 16,\n"
+                "  \"pages_per_block\": 128,\n"
+                "  \"blocks_per_bank\": 1024,\n"
+                "  \"blocks\": 1024,\n"
+                "  \"banks\": 1,\n"
+                "  \"ce_count\": 1,\n"
+                "  \"dies_per_ce\": 1,\n"
+                "  \"planes_per_die\": 1\n"
+                "}\n");
+        fclose(f);
+        LOGI("Wrote NAND geometry.json (page_bytes=8192) at %s", geom_path);
+    } else {
+        LOGE("Failed to write %s: %s", geom_path, strerror(errno));
     }
 }
 
@@ -343,7 +345,6 @@ static void *vm_worker_loop(void *arg) {
     snprintf(nor_path, sizeof(nor_path), "%s/nor.bin", g_container_path);
     snprintf(nand_dir_path, sizeof(nand_dir_path), "%s/nand_storage", g_container_path);
 
-    /* Tworzymy katalog NAND z geometry.json (samhenrigold/qemu-ios wymaga katalogu z geometry.json) */
     ensure_nand_directory(nand_dir_path);
 
     const char *selected_kernel = file_exists(kernel_raw_path) ? kernel_raw_path : kernel_path;
@@ -399,7 +400,7 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Calling qemu_init (v3-nand-dir): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
+    LOGI("Calling qemu_init (v4-page-bytes): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
