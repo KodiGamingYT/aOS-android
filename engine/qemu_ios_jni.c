@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "qemu/osdep.h"
@@ -259,6 +261,37 @@ static bool file_exists(const char *path) {
     return path != NULL && access(path, R_OK) == 0;
 }
 
+static void ensure_nand_directory(const char *nand_dir) {
+    struct stat st;
+    if (stat(nand_dir, &st) != 0) {
+        if (mkdir(nand_dir, 0755) != 0 && errno != EEXIST) {
+            LOGE("Failed to create nand directory %s: %s", nand_dir, strerror(errno));
+            return;
+        }
+    }
+
+    char geom_path[700];
+    snprintf(geom_path, sizeof(geom_path), "%s/geometry.json", nand_dir);
+    if (!file_exists(geom_path)) {
+        FILE *f = fopen(geom_path, "wb");
+        if (f) {
+            /* Standardowa geometria NAND dla ukladow Apple S5L8930 (8KB page, 128 pages/block) */
+            fprintf(f,
+                    "{\n"
+                    "  \"banks\": 1,\n"
+                    "  \"blocks_per_bank\": 1024,\n"
+                    "  \"pages_per_block\": 128,\n"
+                    "  \"bytes_per_page\": 8192,\n"
+                    "  \"spare_bytes_per_page\": 16\n"
+                    "}\n");
+            fclose(f);
+            LOGI("Generated default NAND geometry.json at %s", geom_path);
+        } else {
+            LOGE("Failed to write %s: %s", geom_path, strerror(errno));
+        }
+    }
+}
+
 static void resolve_ios_machine(const char *board, char *out_machine, size_t out_len) {
     const char *target = "iPhone-4";
     if (board != NULL) {
@@ -299,8 +332,7 @@ static void *vm_worker_loop(void *arg) {
     char bootrom_path[600];
     char iboot_path[600];
     char nor_path[600];
-    char nand_path[600];
-    char rootfs_path[600];
+    char nand_dir_path[600];
     char machine_arg[2048];
 
     snprintf(kernel_path, sizeof(kernel_path), "%s/kernelcache", g_container_path);
@@ -309,11 +341,12 @@ static void *vm_worker_loop(void *arg) {
     snprintf(bootrom_path, sizeof(bootrom_path), "%s/bootrom.bin", g_container_path);
     snprintf(iboot_path, sizeof(iboot_path), "%s/iboot.img3", g_container_path);
     snprintf(nor_path, sizeof(nor_path), "%s/nor.bin", g_container_path);
-    snprintf(nand_path, sizeof(nand_path), "%s/nand.img", g_container_path);
-    snprintf(rootfs_path, sizeof(rootfs_path), "%s/rootfs.dmg", g_container_path);
+    snprintf(nand_dir_path, sizeof(nand_dir_path), "%s/nand_storage", g_container_path);
+
+    /* Tworzymy katalog NAND z geometry.json (samhenrigold/qemu-ios wymaga katalogu z geometry.json) */
+    ensure_nand_directory(nand_dir_path);
 
     const char *selected_kernel = file_exists(kernel_raw_path) ? kernel_raw_path : kernel_path;
-    const char *selected_nand = file_exists(nand_path) ? nand_path : rootfs_path;
 
     snprintf(machine_arg, sizeof(machine_arg), "%s", machine);
     if (file_exists(bootrom_path)) {
@@ -332,21 +365,21 @@ static void *vm_worker_loop(void *arg) {
     if (file_exists(nor_path)) {
         append_prop_str(machine_arg, sizeof(machine_arg), "nor", nor_path);
     }
-    if (file_exists(selected_nand)) {
-        append_prop_str(machine_arg, sizeof(machine_arg), "nand", selected_nand);
+    if (file_exists(nand_dir_path)) {
+        append_prop_str(machine_arg, sizeof(machine_arg), "nand", nand_dir_path);
     }
 
     append_prop_str(machine_arg, sizeof(machine_arg), "graphics", "on");
-    append_prop_str(machine_arg, sizeof(machine_arg), "wifi", g_net_enabled ? "on" : "off");
+    append_prop_str(machine_arg, sizeof(machine_arg), "wifi", "off");
 
     const char *ram_str = (strcmp(machine, "iPhone-4") == 0 ||
                            strcmp(machine, "iPod-Touch-4G") == 0 ||
                            strcmp(machine, "ipad1") == 0) ? "512M" : "256M";
 
     LOGI("Checking container files in: %s", g_container_path);
-    LOGI("kboot=%s (exists=%d), dtb=%d, nand=%s (exists=%d)",
+    LOGI("kboot=%s (exists=%d), dtb=%d, nand_dir=%s (exists=%d)",
          selected_kernel, file_exists(selected_kernel),
-         file_exists(dtb_path), selected_nand, file_exists(selected_nand));
+         file_exists(dtb_path), nand_dir_path, file_exists(nand_dir_path));
 
     char *argv[20];
     int argc = 0;
@@ -366,7 +399,7 @@ static void *vm_worker_loop(void *arg) {
     argv[argc++] = "none";
     argv[argc] = NULL;
 
-    LOGI("Calling qemu_init (v2-tcg-multi): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
+    LOGI("Calling qemu_init (v3-nand-dir): -M %s -accel tcg,thread=multi -m %s -smp 2 (argc=%d)", machine_arg, ram_str, argc);
 
     int init_rc = qemu_init(argc, argv, NULL);
     LOGI("qemu_init returned: %d", init_rc);
