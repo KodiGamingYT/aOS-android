@@ -29,7 +29,7 @@ jobs:
           TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
           PREFIX="$GITHUB_WORKSPACE/deps-arm64"
-          mkdir -p "$PREFIX/bin"
+          mkdir -p "$PREFIX/bin" "$PREFIX/lib"
 
           ln -sf "$TOOLCHAIN/bin/llvm-nm" "$TOOLCHAIN/bin/aarch64-linux-android29-nm"
           ln -sf "$TOOLCHAIN/bin/llvm-ar" "$TOOLCHAIN/bin/aarch64-linux-android29-ar"
@@ -142,8 +142,11 @@ jobs:
           ANDROID_NDK_ROOT="$NDK_DIR" PATH="$TOOLCHAIN/bin:$PATH" make install_sw
           cd ..
 
-      - name: Ensure toolchain wrappers exist
+      - name: Ensure toolchain wrappers and Android librt stub exist
         run: |
+          mkdir -p "$PREFIX/lib"
+          "$AR" rcs "$PREFIX/lib/librt.a"
+
           cp "$PREFIX/bin/aarch64-linux-android29-pkg-config" "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
           chmod +x "$TOOLCHAIN/bin/aarch64-linux-android29-pkg-config"
 
