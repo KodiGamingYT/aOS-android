@@ -9,8 +9,8 @@
 - **Guided Setup Flow:** Clean dark-mode onboarding (`Welcome` → `Choose your first container` → `IPSW Fetch & Boot`).
 - **Supported iOS Targets:**
   - **iOS 6.1.4** (`iPhone 5` / `n42ap`) - Currently doesn't download (403 Error)
-  - **iOS 7.1.2** (`iPhone 4` / `n90ap`) - Currently doesn't download (403 Error)
-  - **iOS 8.4.1** (`iPhone 5` / `n41ap`) - Downloads and builds the container succesfully.
+  - **iOS 7.1.2** (`iPhone 4` / `n90ap`) - Currently  only one working.
+  - **iOS 8.4.1** (`iPhone 5` / `n41ap`) - Downloads but it doesn't build the container propelly.
 - **Direct Apple CDN Integration:** Automatically downloads official `.ipsw` restore images directly from Apple servers, extracts `kernelcache`, `DeviceTree`, and `RootFS`, and removes temporary archives after building the container.
 - **Optional Jailbreak & Cydia Injection:** Pre-configures untethered jailbreak patches and installs **Cydia** during container creation when enabled.
 - **Hardware-Mapped VM Controls:**
